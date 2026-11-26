@@ -117,6 +117,12 @@ body.dfu-off .dfu{text-decoration:none;cursor:inherit}
 .opt.right{background:#dcfce7;border-color:var(--ok)}.opt.wrong{background:#fee2e2;border-color:var(--bad)}
 .fb{margin-top:6px;font-size:16.5px}.fb.ok{color:#15803d}.fb.no{color:#b91c1c}
 @media (max-width:700px){.runbar{top:120px}.tgrid.wide{grid-template-columns:1fr}}
+
+.sq{white-space:nowrap}.sq>span{border-top:2px solid currentColor;padding:0 3px;margin-left:1px}.sq .ri{font-size:.55em;margin-right:-4px;vertical-align:super}
+.gap{display:inline-block;min-width:46px;border-bottom:2px dashed #94a3b8;text-align:center;color:#94a3b8}
+.kpad.np{gap:8px}.kpad.np button{min-width:74px;font-size:28px;padding:10px 0}.kpad.np button.go{background:var(--ok);min-width:110px}
+.nvb{white-space:nowrap;font-size:15px;padding:7px 10px}
+.acard .ai{font-weight:700}
 </style>
 </head>
 <body>
@@ -721,10 +727,23 @@ function parseTerm(str){
   function power(){
     let b=atom();
     for(;;){const t=peek();
-      if(isOp(t,'^')){eat();let neg=false;if(isOp(peek(),'-')){eat();neg=true;}const e=eat();if(!e||e.k!=='num'||e.v.includes('.'))throw new Error('Exponent');b={t:'pow',base:b,e:(neg?-1:1)*(+e.v)};}
+      if(isOp(t,'^')){eat();b=mkPow(b,expAtom());}
       else if(t&&t.k==='sup'){eat();b={t:'pow',base:b,e:t.v};}
       else break;}
     return b;
+  }
+  function expAtom(){                       // Exponent: Zahl, Variable, (Term), auch negativ
+    if(isOp(peek(),'-')){eat();return {t:'neg',node:expAtom()};}
+    if(isOp(peek(),'(')){eat();const e=expr();if(!isOp(eat(),')'))throw new Error('Klammer');return {t:'grp',node:e};}
+    const e=eat();if(!e)throw new Error('Exponent');
+    if(e.k==='num'){const fp=(e.v.split('.')[1]||'');return {t:'num',q:new Q(Math.round(+e.v.replace('.','')),Math.pow(10,fp.length)),dec:fp.length>0};}
+    if(e.k==='var')return {t:'var',v:e.v};
+    throw new Error('Exponent');
+  }
+  function mkPow(b,ex){
+    let x=ex,sg=1;while(x.t==='neg'||x.t==='grp'){if(x.t==='neg')sg=-sg;x=x.node;}
+    if(x.t==='num'&&x.q.isInt())return {t:'pow',base:b,e:sg*x.q.n,ex};
+    return {t:'pow',base:b,e:null,ex};
   }
   function atom(){
     const t=eat();if(!t)throw new Error('Ende');
@@ -754,14 +773,14 @@ function toPoly(n){
     case 'grp':return toPoly(n.node);
     case 'neg':return P.c(qi(0)).add(toPoly(n.node),-1);
     case 'sum':return n.terms.reduce((acc,t)=>acc.add(toPoly(t.node),t.sign),new P());
-    case 'pow':{const b=toPoly(n.base);if(n.e<0){if(!b.isMono())throw new Error('Potenz');const t=b.terms()[0],v={};Object.keys(t.v).forEach(x=>v[x]=t.v[x]*n.e);let c=qi(1);for(let i=0;i<-n.e;i++)c=c.div(t.c);const r=new P();r.m[mkey(v)]={c,v};return r;}
-      if(n.e>12)throw new Error('Potenz');let r=P.c(qi(1));for(let i=0;i<n.e;i++)r=r.mul(b);return r;}
+    case 'pow':{if(n.e===null||n.e===undefined)throw new Error('Potenz');const b=toPoly(n.base);if(n.e<0){if(!b.isMono())throw new Error('Potenz');const t=b.terms()[0],v={};Object.keys(t.v).forEach(x=>v[x]=t.v[x]*n.e);let c=qi(1);for(let i=0;i<-n.e;i++)c=c.div(t.c);const r=new P();r.m[mkey(v)]={c,v};return r;}
+      if(n.e>(b.isMono()?60:12))throw new Error('Potenz');let r=P.c(qi(1));for(let i=0;i<n.e;i++)r=r.mul(b);return r;}
     case 'prod':{let r=P.c(qi(1));n.f.forEach(f=>{const p=toPoly(f.node);if(f.op==='/'){if(!p.isMono())throw new Error('Division');const t=p.terms()[0];const v={};Object.keys(t.v).forEach(x=>v[x]=-t.v[x]);const inv=new P();inv.m[mkey(v)]={c:qi(1).div(t.c),v};r=r.mul(inv);}else r=r.mul(p);});return r;}
   }
   throw new Error('?');
 }
 /* ---------- Ist ein Term vollständig vereinfacht? → Liste von Hinweisen (leer = ja) ---------- */
-function simplifyIssues(n){
+function simplifyIssues(n,allowNeg){
   const iss=new Set(),sigs={};
   const terms=n.t==='sum'?n.terms.map(t=>t.node):[n];
   terms.forEach(t=>{
@@ -770,9 +789,10 @@ function simplifyIssues(n){
     let nums=0;const vars={};
     fs.forEach((f,i)=>{const x=f.node;
       if(x.t==='num'){if(f.op==='/'){if(i===0||fs[i-1].node.t!=='num')nums++;}else nums++;}
-      else if(x.t==='var'){if(f.op==='/')iss.add('div');if(vars[x.v])iss.add('samevar');vars[x.v]=1;}
-      else if(x.t==='pow'&&x.base.t==='var'){if(f.op==='/'||x.e<0)iss.add('div');if(vars[x.base.v])iss.add('samevar');vars[x.base.v]=1;if(x.e===0||x.e===1)iss.add('exp');}
+      else if(x.t==='var'){if(f.op==='/'&&!allowNeg)iss.add('div');if(vars[x.v])iss.add('samevar');vars[x.v]=1;}
+      else if(x.t==='pow'&&x.base.t==='var'){if(x.e===null)iss.add('grp');if((f.op==='/'||x.e<0)&&!allowNeg)iss.add('div');if(vars[x.base.v])iss.add('samevar');vars[x.base.v]=1;if(x.e===0||x.e===1)iss.add('exp');}
       else if(x.t==='pow'&&x.base.t==='num')iss.add('numpow');
+      else if(x.t==='grp'&&x.node.t==='prod'&&x.node.f.length===2&&x.node.f.every(g=>g.node.t==='num')&&x.node.f[1].op==='/'&&f.op!=='/'){nums++;}   // (5/3)a erlaubt
       else if(x.t==='grp'||(x.t==='pow'&&x.base.t==='grp'))iss.add('grp');
       else if(x.t==='neg')iss.add('grp');
       else iss.add('grp');});
@@ -823,14 +843,36 @@ function polyHtml(p){
 }
 /* Eingabe hübsch anzeigen (Vorschau) */
 function prettyIn(s){
-  s=normIn(s);let o='';
-  for(let i=0;i<s.length;i++){const c=s[i];
-    if(c==='^'){let j=i+1,e='';if(s[j]==='-'){e='−';j++;}while(j<s.length&&/[0-9]/.test(s[j])){e+=s[j];j++;}o+='<sup>'+(e||'?')+'</sup>';i=j-1;}
-    else if(/[a-zA-Z]/.test(c))o+='<i>'+c+'</i>';
-    else if(c==='*')o+=' · ';else if(c==='-')o+=' − ';else if(c==='+')o+=' + ';else if(c===':')o+=' : ';
-    else o+=esc(c);}
-  return o;
+  s=normIn(s);let i=0;
+  function seq(stop){let o='';
+    while(i<s.length){const c=s[i];
+      if(stop&&c===')')return o;
+      if(c==='^'){i++;let e='';
+        if(s[i]==='('){i++;e=seq(true);i++;}
+        else{if(s[i]==='-'){e='−';i++;}while(i<s.length&&/[0-9a-z.,]/i.test(s[i])){e+=/[a-z]/i.test(s[i])?'<i>'+s[i]+'</i>':s[i];i++;}}
+        o+='<sup>'+(e||'?')+'</sup>';continue;}
+      if(c==='('){i++;o+='('+seq(true)+')';i++;continue;}
+      if(/[a-zA-Z]/.test(c))o+='<i>'+c+'</i>';
+      else if(c==='*')o+=' · ';else if(c==='-')o+=' − ';else if(c==='+')o+=' + ';else if(c===':')o+=' : ';
+      else o+=esc(c);i++;}
+    return o;}
+  return seq(false);
 }
+/* Zahlenwert eines Terms (auch mit Variablen im Exponenten) */
+function evalA(n,env){
+  switch(n.t){
+    case 'num':return n.q.val();
+    case 'var':return env[n.v]!==undefined?env[n.v]:2;
+    case 'grp':return evalA(n.node,env);
+    case 'neg':return -evalA(n.node,env);
+    case 'sum':return n.terms.reduce((a,t)=>a+t.sign*evalA(t.node,env),0);
+    case 'prod':return n.f.reduce((a,f)=>f.op==='/'?a/evalA(f.node,env):a*evalA(f.node,env),1);
+    case 'pow':return Math.pow(evalA(n.base,env),n.e!==null&&n.e!==undefined?n.e:evalA(n.ex,env));
+  }
+  return NaN;
+}
+const ENVS=[{n:1,m:2,k:3,x:2,y:3,a:3,b:5,r:2,s:7,t:3},{n:2,m:3,k:1,x:3,y:2,a:2,b:3,r:5,s:2,t:4},{n:3,m:1,k:2,x:5,y:7,a:7,b:2,r:3,s:3,t:2},{n:5,m:4,k:4,x:1.5,y:2.5,a:1.2,b:0.7,r:1.1,s:1.3,t:0.9}];
+function sameValue(a,b){return ENVS.every(e=>{const u=evalA(a,e),v=evalA(b,e);if(!isFinite(u)||!isFinite(v))return isFinite(u)===isFinite(v);return Math.abs(u-v)<=1e-9*Math.max(1,Math.abs(u),Math.abs(v));});}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 /* =====================================================================
    Aufgaben-Generatoren
@@ -1091,23 +1133,258 @@ const AREAS=[
   {id:'P',grp:'zahlen',ic:'💯',name:'Prozentrechnung',kl:'Kl. 7',ops:false,lv:['einfache Prozentsätze','Prozentwert, -satz, Grundwert','schwierige Zahlen, Erhöhung'],est:[20,35,45],g:genP},
   {id:'T',grp:'algebra',ic:'🔤',name:'Terme vereinfachen',kl:'Kl. 7–8',ops:false,lv:['gleichartige Terme (eine Variable)','mehrere Variablen, Produkte','Klammern auflösen','Potenzen','binomische Formeln','Brüche in Termen'],est:[20,25,35,30,45,50],g:genT},
   {id:'E',grp:'algebra',ic:'⚖️',name:'Gleichungen lösen',kl:'Kl. 7–8',ops:false,lv:['ein Schritt','zwei Schritte','x auf beiden Seiten, Klammern'],est:[12,25,45],g:genE},
-  {id:'Q',grp:'algebra',ic:'🟦',name:'Quadratische Ergänzung',kl:'Kl. 8–9',ops:false,lv:['x² + bx + c (b gerade)','Brüche oder Faktor vor x²'],est:[60,100],g:genQ}
+  {id:'Q',grp:'algebra',ic:'🟦',name:'Quadratische Ergänzung',kl:'Kl. 8–9',ops:false,lv:['x² + bx + c (b gerade)','Brüche oder Faktor vor x²'],est:[60,100],g:genQ},
+  {id:'ERG',grp:'zahlen',ic:'🎯',name:'Ergänzen zu 10, 100, 1000',kl:'Kl. 5',ops:false,lv:['zu 10, Zehner zu 100','zu 100','zu 1000','Dezimalzahlen zu 1'],est:[3,4,6,5],g:genERG,n:40},
+  {id:'QW',grp:'zahlen',ic:'√',name:'Quadratzahlen und Wurzeln',kl:'Kl. 5–8',ops:false,lv:['Quadratzahlen bis 20², Wurzeln','Dezimalzahlen, Brüche, hoch 0,5','Kubikzahlen, n-te Wurzeln'],est:[5,20,25],g:genQW},
+  {id:'PF',grp:'teil',ic:'🧩',name:'Primfaktorzerlegung',kl:'Kl. 5–6',ops:false,lv:['Faktoren 2, 3, 5, 7','Faktoren bis 13','Faktoren bis 31'],dim:{name:'Anzahl der Faktoren',lv:['2–3 Faktoren','3–4 Faktoren','4–6 Faktoren']},est:(l,d)=>10+10*l+10*d,g:genPF},
+  {id:'GK',grp:'teil',ic:'🤝',name:'ggT und kgV',kl:'Kl. 5–6',ops:false,lv:['kleine Zahlen','mittlere Zahlen','große Zahlen'],dim:{name:'Wie viele Zahlen?',lv:['2 Zahlen','3 Zahlen','4 Zahlen']},est:(l,d)=>10+10*l+10*d,g:genGK},
+  {id:'AK',grp:'algebra',ic:'🧲',name:'Ausklammern und Ausmultiplizieren',kl:'Kl. 7–8',ops:false,lv:['Zahlen, eine Variable','Potenzen einer Variablen','mehrere Variablen, 3 Summanden','große Zahlen, 3–4 Summanden'],est:[25,40,60,80],g:genAK},
+  {id:'PO',grp:'algebra',ic:'🚀',name:'Potenzen',kl:'Kl. 7–9',ops:false,lv:['Potenzen berechnen','Potenzgesetze mit Zahlen','Potenzgesetze mit Variablen','Variable im Exponenten (2ⁿ + 2ⁿ …)'],est:[12,20,30,45],g:genPO}
 ];
+const GROUPS=[['zahlen','Rechnen mit Zahlen'],['teil','Teilbarkeit'],['algebra','Terme und Gleichungen']];
 const AREA=id=>AREAS.find(a=>a.id===id);
 const OPLIST=['+','-','*',':'];
-function estOf(ar,lvl,op){const e=ar.est[lvl-1];return Array.isArray(e)?e[OPLIST.indexOf(op)]:e;}
+function estOf(ar,lvl,op,dim){if(typeof ar.est==='function')return ar.est(lvl,dim||1);const e=ar.est[lvl-1];return Array.isArray(e)?e[OPLIST.indexOf(op)]:e;}
 /* Runde erzeugen (immer gleich bei gleichem Startwert) */
-function makeRound(areaId,lvl,ops,n,seed){
+function makeRound(areaId,lvl,ops,n,seed,dim){
   const ar=AREA(areaId);RND=rng(seed);const out=[];const seen=new Set();
   for(let i=0;i<n;i++){
     let tk,op,tries=0;
-    do{op=ar.ops?ops[i%ops.length]:null;tk=ar.g(lvl,op);tries++;}while(seen.has(tk.html)&&tries<20);
-    seen.add(tk.html);tk.op=op;tk.est=estOf(ar,lvl,op);out.push(tk);
+    do{op=ar.ops?ops[i%ops.length]:null;tk=ar.g(lvl,op,dim);tries++;}while(seen.has(tk.html)&&tries<20);
+    seen.add(tk.html);tk.op=op;tk.est=estOf(ar,lvl,op,dim);out.push(tk);
   }
   RND=Math.random;
   // Rechenarten gemischt
   if(ar.ops&&ops.length>1){const r=rng(seed+7);for(let i=out.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[out[i],out[j]]=[out[j],out[i]];}}
   return out;
+}
+/* =====================================================================
+   Neue Bereiche: Ergänzen, Quadratzahlen & Wurzeln, Primfaktoren, ggT/kgV,
+   Ausklammern & Ausmultiplizieren, Potenzen
+   ===================================================================== */
+const termDec=d=>{if(d===1)return false;while(d%2===0)d/=2;while(d%5===0)d/=5;return d===1;};
+const sq=x=>`<span class="sq">√<span>${x}</span></span>`;
+const isPrime=n=>{if(n<2)return false;for(let i=2;i*i<=n;i++)if(n%i===0)return false;return true;};
+function factorize(n){const f={};for(let p=2;p*p<=n;p++)while(n%p===0){f[p]=(f[p]||0)+1;n/=p;}if(n>1)f[n]=(f[n]||0)+1;return f;}
+const fTxt=f=>Object.keys(f).map(Number).sort((a,b)=>a-b).map(p=>f[p]>1?`${p}<sup>${f[p]}</sup>`:String(p)).join(' · ');
+/* ---------------- Ergänzen zu 10, 100, 1000 ---------------- */
+function genERG(lvl){
+  let a,z,dec=false;
+  if(lvl===1){if(RND()<0.5){z=10;a=ri(1,9);}else{z=100;a=ri(1,9)*10;}}
+  else if(lvl===2){z=100;a=ri(11,99);if(a%10===0)a++;}
+  else if(lvl===3){z=1000;a=ri(101,999);if(a%10===0)a+=3;}
+  else{z=1;a=ri(1,99);dec=true;}
+  const A=dec?new Q(a,100):qi(a),Z=qi(z),R=Z.sub(A);
+  const As=dec?qDec(A):String(a);
+  return {html:`${As} + <span class="gap">?</span> = ${dec?'1':z}`,kind:'num',a:R,want:dec?'dec':'int',pad:true,sol:`${As} + ${dec?qDec(R):R.n} = ${dec?'1':z}`,
+    tip:v=>{const d=Math.abs(v-R.val());
+      if(Math.abs(v+A.val()-Z.val()*10)<1e-9)return 'Du hast zur falschen Zahl ergänzt. Ziel: <b>'+(dec?'1':z)+'</b>.';
+      if(!dec&&z>=100&&(d===10||d===1||d===100))return `Fast! Tipp: Ergänze die Einer zu 10 und die Zehner zu ${z===100?'9':'9 (und die Hunderter zu 9)'}. Beispiel: 37 → 63, denn 7 + 3 = 10 und 3 + 6 = 9.`;
+      return dec?'Ergänze die Hundertstel zu 10 und die Zehntel zu 9: 0,37 + 0,63 = 1.':`Prüfe: ${As} + dein Ergebnis muss genau ${z} ergeben.`;}};
+}
+/* ---------------- Quadratzahlen und Wurzeln ---------------- */
+function genQW(lvl){
+  let html,r,t;
+  const k=ri(0,1);
+  if(lvl===1){const n=RND()<0.8?ri(2,20):pick([25,30,40,50,60,70,80,90]);
+    if(k===0){html=`${n}<sup>2</sup> =`;r=qi(n*n);t='Quadrieren heißt: die Zahl mit sich selbst multiplizieren. '+n+'² = '+n+' · '+n+'.';}
+    else{html=`${sq(n*n)} =`;r=qi(n);t='Gesucht ist die Zahl, die mit sich selbst multipliziert '+(n*n)+' ergibt.';}}
+  else if(lvl===2){
+    const typ=ri(0,3);
+    if(typ===0){const d=ri(1,15),p=pick([1,2]);const A=new Q(d,Math.pow(10,p));r=A.mul(A);html=`${qDec(A)}<sup>2</sup> =`;t='Rechne ohne Komma: '+d+'² = '+(d*d)+'. Das Ergebnis hat <b>doppelt so viele Nachkommastellen</b>.';}
+    else if(typ===1){const d=ri(1,15),p=pick([1,2]);const A=new Q(d,Math.pow(10,p));r=A;html=RND()<0.5?`${sq(qDec(A.mul(A)))} =`:`(${qDec(A.mul(A))})<sup>0,5</sup> =`;t='Hoch 0,5 heißt Wurzel. Tipp: Wurzel ohne Komma ziehen, dann hat das Ergebnis <b>halb so viele Nachkommastellen</b>.';}
+    else if(typ===2){const a=ri(1,9),b=ri(2,12);if(a>=b||gcd(a,b)!==1)return genQW(lvl);r=new Q(a,b);html=RND()<0.5?`${sq(fr(a*a,b*b))} =`:`(${fr(a*a,b*b)})<sup>0,5</sup> =`;t='Ziehe die Wurzel aus Zähler und Nenner einzeln.';}
+    else{const a=ri(1,9),b=ri(2,9);if(gcd(a,b)!==1)return genQW(lvl);r=new Q(a*a,b*b);html=`(${fr(a,b)})<sup>2</sup> =`;t='Quadriere Zähler und Nenner einzeln.';}
+  }else{
+    const typ=ri(0,3);
+    if(typ===0){const n=ri(2,10);r=qi(n*n*n);html=`${n}<sup>3</sup> =`;t=n+'³ = '+n+' · '+n+' · '+n+'.';}
+    else if(typ===1){const n=ri(2,10);r=qi(n);html=RND()<0.5?`<span class="sq"><sup class="ri">3</sup>√<span>${n*n*n}</span></span> =`:`${n*n*n}<sup>1/3</sup> =`;t='Gesucht ist die Zahl, die dreimal mit sich selbst multipliziert '+(n*n*n)+' ergibt.';}
+    else if(typ===2){const n=pick([2,3,4,5]);const e=pick([4,5,6].filter(x=>Math.pow(n,x)<=10000));r=qi(n);html=`${Math.pow(n,e)}<sup>1/${e}</sup> =`;t='Hoch 1/'+e+' heißt: '+e+'-te Wurzel. Welche Zahl hoch '+e+' ergibt '+Math.pow(n,e)+'?';}
+    else{const n=pick([4,8,9,16,25,27,32,64,81,125]);const opts=[[4,2,3],[8,3,2],[9,2,3],[16,4,3],[16,2,3],[25,2,3],[27,3,2],[32,5,2],[64,3,2],[64,2,3],[81,4,3],[125,3,2]].filter(x=>x[0]===n);
+      if(!opts.length)return genQW(lvl);const [b,q2,p2]=pick(opts);const root=Math.round(Math.pow(b,1/q2));r=qi(Math.round(Math.pow(root,p2)));html=`${b}<sup>${p2}/${q2}</sup> =`;t=`Erst die ${q2}. Wurzel ziehen (= ${root}), dann hoch ${p2}.`;}
+  }
+  return {html,kind:'num',a:r,want:'any',sol:`${html} ${(termDec(r.d)&&!html.includes('class="fr"'))?qDec(r):qHtml(r)}`,tip:v=>[digitsTip(v,r.val()),t].filter(Boolean).join(' ')};
+}
+/* ---------------- Primfaktorzerlegung ---------------- */
+const PPOOL=[null,[2,3,5,7],[2,3,5,7,11,13],[2,3,5,7,11,13,17,19,23,29,31]];
+const PCNT=[null,[2,3],[3,4],[4,6]];
+function genPF(lvl,op,dim){
+  dim=dim||1;
+  for(let tries=0;tries<200;tries++){
+    const cnt=ri(...PCNT[dim]),f=[];
+    for(let i=0;i<cnt;i++){let p=pick(PPOOL[lvl]);if(lvl===3&&i>0&&p>13&&RND()<0.6)p=pick([2,3,5]);f.push(p);}
+    if(lvl>=2&&!f.some(p=>p>=(lvl===2?11:13)))f[0]=pick(PPOOL[lvl].filter(p=>p>=(lvl===2?11:13)));
+    const N=f.reduce((a,b)=>a*b,1);
+    if(N>(dim===3?50000:20000)||N<10)continue;
+    const fc=factorize(N);
+    return {html:`${N}`,lead:'Zerlege in Primfaktoren:',kind:'pf',a:N,ans:Object.keys(fc).map(p=>fc[p]>1?p+'^'+fc[p]:p).join('*'),sol:`${N} = ${fTxt(fc)}`,
+      tip:()=>'Teile immer wieder durch die kleinste Primzahl, die passt: 2, 3, 5, 7, 11, 13, … Schreibe alle Faktoren mit · dazwischen, z. B. 2^3 · 5 oder 2 · 2 · 2 · 5.'};
+  }
+  return genPF(1,op,1);
+}
+function parseFactors(raw){
+  const s=normIn(raw).replace(/×/g,'*').replace(/\s*[x·]\s*/gi,'*').replace(/\s+/g,'*');
+  const parts=s.split('*').filter(Boolean),out=[];
+  for(const p of parts){let m;
+    if((m=p.match(/^(\d+)\^(\d+)$/)))out.push([+m[1],+m[2]]);
+    else if((m=p.match(/^(\d+)([²³⁴⁵⁶⁷⁸⁹]+)$/)))out.push([+m[1],+[...m[2]].map(c=>SUPD[c]).join('')]);
+    else if((m=p.match(/^(\d+)$/)))out.push([+m[1],1]);
+    else return null;}
+  return out.length?out:null;
+}
+/* ---------------- ggT und kgV ---------------- */
+const GPOOL=[null,[2,3,5],[2,3,5,7],[2,3,5,7,11,13]];
+function genGK(lvl,op,dim){
+  dim=dim||1;const cnt=dim+1,ggt=RND()<0.5;
+  for(let tries=0;tries<400;tries++){
+    const pool=GPOOL[lvl],common=[];const nc=ri(1,lvl+1);for(let i=0;i<nc;i++)common.push(pick(pool));
+    const g0=common.reduce((a,b)=>a*b,1);
+    const nums=[];for(let i=0;i<cnt;i++){let x=g0;const ne=ri(1,lvl===1?2:3);for(let j=0;j<ne;j++)x*=pick(pool);nums.push(x);}
+    if(new Set(nums).size<cnt)continue;
+    const G=nums.reduce((a,b)=>gcd(a,b)),L=nums.reduce((a,b)=>lcm(a,b));
+    const maxN=[0,100,300,1000][lvl],maxL=[0,300,2000,10000][lvl];
+    if(nums.some(x=>x>maxN)||L>maxL||(ggt&&G===1))continue;
+    const r=ggt?G:L,name=ggt?'ggT':'kgV';
+    return {html:`${name}(${nums.join('; ')}) =`,kind:'num',a:qi(r),want:'int',sol:`${name}(${nums.join('; ')}) = ${r}`,
+      tip:v=>{
+        if(ggt&&v===L)return 'Du hast das <b>kgV</b> berechnet. Gesucht ist der größte <b>gemeinsame Teiler</b>.';
+        if(!ggt&&v===G)return 'Du hast den <b>ggT</b> berechnet. Gesucht ist das kleinste <b>gemeinsame Vielfache</b>.';
+        if(ggt&&v>0&&nums.every(x=>x%v===0))return `${v} ist ein gemeinsamer Teiler – aber nicht der <b>größte</b>.`;
+        if(!ggt&&v>0&&Number.isInteger(v)&&nums.every(x=>v%x===0))return `${v} ist ein gemeinsames Vielfaches – aber nicht das <b>kleinste</b>.`;
+        if(!ggt&&v===nums.reduce((a,b)=>a*b,1))return 'Das Produkt aller Zahlen ist nicht immer das kgV.';
+        return ggt?'Zerlege alle Zahlen in Primfaktoren. ggT: nur die <b>gemeinsamen</b> Faktoren, jeweils mit dem <b>kleinsten</b> Exponenten.'
+                  :'Zerlege alle Zahlen in Primfaktoren. kgV: <b>alle</b> Faktoren, jeweils mit dem <b>größten</b> Exponenten.';}};
+  }
+  return genGK(1,op,1);
+}
+/* ---------------- Ausklammern und Ausmultiplizieren ---------------- */
+const AKV=[null,[['x'],['a'],['y']],[['a'],['x'],['y']],[['r','t'],['a','b'],['x','y']],[['a','b'],['x','y'],['m','n']]];
+function monoS(c,v){const t=tStr(qi(c),v);return t;}
+function genAK(lvl){
+  const vars=pick(AKV[lvl]),aus=RND()<0.55;            // ausklammern oder ausmultiplizieren
+  const nTerms=lvl===1?2:lvl===2?ri(2,3):lvl===3?3:ri(3,4);
+  for(let tries=0;tries<300;tries++){
+    // gemeinsamer Faktor
+    const fc=lvl===1?pick([2,3,4,5,6,7,8,9]):lvl===2?pick([2,3,4,5,6,8,10]):lvl===3?pick([2,3,4,6,8,12]):pick([3,5,6,7,9,12,15]);
+    const fv={};
+    if(lvl===1){if(RND()<0.3&&aus){/* nur Zahlen */}else if(RND()<0.4)fv[vars[0]]=1;}
+    else vars.forEach(v=>{const e=lvl===2?ri(1,3):ri(1,3);if(e)fv[v]=e;});
+    // innere Summanden
+    const inner=[];const numOnly=lvl===1&&!Object.keys(fv).length;
+    for(let i=0;i<nTerms;i++){
+      const c=riNZ(lvl===4?-9:-7,lvl===4?9:9);const v={};
+      if(!numOnly){if(lvl===1){if(i===0)v[vars[0]]=1;}
+        else vars.forEach(x=>{const e=ri(0,lvl===2?3:4);if(e)v[x]=e;});}
+      inner.push([c,v]);}
+    // Bedingungen: ggT der Zahlen 1, keine gemeinsame Variable, verschiedene Monome
+    if(inner.map(x=>Math.abs(x[0])).reduce((a,b)=>gcd(a,b))!==1)continue;
+    if(vars.some(x=>inner.every(t=>(t[1][x]||0)>0)))continue;
+    if(new Set(inner.map(t=>mkey(t[1]))).size<inner.length&&!numOnly)continue;
+    if(numOnly&&inner.some(t=>Math.abs(t[0])<2))continue;
+    if(inner[0][0]<0&&aus&&RND()<0.7)continue;
+    const F=[fc,fv];
+    const outer=inner.map(([c,v])=>{const w=Object.assign({},v);Object.keys(fv).forEach(x=>w[x]=(w[x]||0)+fv[x]);return [qi(c*fc),w];});
+    const innerS=sumOf(inner.map(([c,v])=>[qi(c),v])),outerS=sumOf(outer);
+    const facS=tStr(qi(fc),fv),facH=tHtml(qi(fc),fv);
+    const P_=toPoly(parseTerm(outerS.s));
+    if(aus){
+      return {html:outerS.h,lead:'Klammere so viel wie möglich aus:',kind:'fac',a:P_,ans:`${facS.abs}(${innerS.s})`,sol:`${facH}(${innerS.h})`,F:{c:fc,v:fv},
+        tip:()=>'Suche den <b>ggT der Zahlen</b> und die <b>kleinste Potenz jeder Variablen</b>, die in allen Summanden vorkommt. Das kommt vor die Klammer.'};
+    }
+    const fH=(lvl>=3&&RND()<0.4)?'−'+facH:facH,neg=fH.startsWith('−');
+    const src=`${neg?'-':''}${facS.abs}*(${innerS.s})`,a=toPoly(parseTerm(src));
+    return {html:`${fH}(${innerS.h})`,lead:'Multipliziere aus:',kind:'term',a,sol:polyHtml(a),
+      tip:()=>'Multipliziere den Faktor mit <b>jedem</b> Summanden in der Klammer. Gleiche Basis: Exponenten <b>addieren</b>. Minus vor der Klammer: alle Vorzeichen drehen sich um.'};
+  }
+  return genAK(1);
+}
+/* Ist der Term vollständig ausgeklammert? → Liste von Problemen */
+function factorIssues(ast){
+  if(ast.t==='neg')ast=ast.node;
+  if(ast.t==='sum'&&ast.terms.length===1)ast=ast.terms[0].node;
+  const fs=ast.t==='prod'?ast.f:[{op:'*',node:ast}];
+  if(fs.some(f=>f.op==='/'))return ['form'];
+  const grps=fs.filter(f=>f.node.t==='grp'),rest=fs.filter(f=>f.node.t!=='grp');
+  if(grps.length!==1)return ['form'];
+  if(rest.some(f=>!(f.node.t==='num'||f.node.t==='var'||(f.node.t==='pow'&&f.node.base.t==='var'&&f.node.e>0)||(f.node.t==='neg'&&f.node.node.t==='num'))))return ['form'];
+  const g=grps[0].node.node;
+  if(g.t!=='sum'||g.terms.length<2)return ['form'];
+  const mons=[];
+  for(const t of g.terms){let p;try{p=toPoly(t.node);}catch(e){return ['form'];}
+    const ts=p.terms();if(ts.length!==1)return ['form'];mons.push(ts[0]);}
+  const iss=[];
+  if(mons.some(m=>!m.c.isInt()))iss.push('frac');
+  else{const gg=mons.map(m=>Math.abs(m.c.n)).reduce((a,b)=>gcd(a,b));if(gg>1)iss.push('num:'+gg);}
+  const vs=new Set();mons.forEach(m=>Object.keys(m.v).forEach(x=>vs.add(x)));
+  vs.forEach(x=>{const mn=Math.min(...mons.map(m=>m.v[x]||0));if(mn>0)iss.push('var:'+x+(mn>1?'^'+mn:''));});
+  return iss;
+}
+/* ---------------- Potenzen ---------------- */
+const NV='✋ geht nicht';
+function genPO(lvl){
+  if(lvl===1){                                 // Potenzen berechnen
+    const k=ri(0,4);let html,r,t='Potenz: Die Basis wird so oft mit sich selbst multipliziert, wie der Exponent angibt.';
+    if(k===0){const b=ri(2,9),e=b<=3?ri(3,6):ri(2,3);html=`${b}<sup>${e}</sup> =`;r=qi(Math.pow(b,e));}
+    else if(k===1){const b=-ri(2,5),e=ri(2,4);html=`(${N_(b)})<sup>${e}</sup> =`;r=qi(Math.pow(b,e));t='Negative Basis: Gerader Exponent → Ergebnis <b>positiv</b>, ungerader Exponent → <b>negativ</b>.';
+      if(RND()<0.4){html=`−${-b}<sup>${e}</sup> =`;r=qi(-Math.pow(-b,e));t='Achtung: Bei −'+(-b)+'<sup>'+e+'</sup> gehört das Minus <b>nicht</b> zur Basis (keine Klammer!).';}}
+    else if(k===2){const e=ri(2,6),neg=RND()<0.4;html=`10<sup>${neg?'−':''}${e}</sup> =`;r=neg?new Q(1,Math.pow(10,e)):qi(Math.pow(10,e));t='10<sup>n</sup>: eine 1 mit n Nullen. 10<sup>−n</sup> = 0,0…01 (n Stellen nach dem Komma).';}
+    else if(k===3){const b=ri(2,5),e=ri(1,3);html=`${b}<sup>−${e}</sup> =`;r=new Q(1,Math.pow(b,e));t='Negativer Exponent: a<sup>−n</sup> = 1 : a<sup>n</sup>.';}
+    else{const d=ri(1,9),e=ri(2,3);const A=new Q(d,10);html=`${qDec(A)}<sup>${e}</sup> =`;r=new Q(Math.pow(d,e),Math.pow(10,e));t='Rechne ohne Komma; das Ergebnis hat '+e+'-mal so viele Nachkommastellen.';}
+    return {html,kind:'num',a:r,want:'any',sol:`${html} ${qDec(r)||qHtml(r)}`,tip:v=>[digitsTip(v,r.val()),t].filter(Boolean).join(' ')};
+  }
+  const nvChance=0.2;
+  if(lvl===2){                                 // Potenzgesetze mit Zahlen: als EINE Potenz schreiben
+    if(RND()<nvChance){const b=ri(2,7),c=ri(2,7),m=ri(2,6),n=ri(2,6);if(b===c||m===n)return genPO(lvl);
+      const opts=[[`${b}<sup>${m}</sup> + ${b}<sup>${n}</sup>`,'Bei einer <b>Summe</b> gibt es kein Potenzgesetz. Man kann sie nicht als eine Potenz schreiben.'],[`${b}<sup>${m}</sup> · ${c}<sup>${n}</sup>`,'Verschiedene Basis <b>und</b> verschiedener Exponent: Hier hilft kein Potenzgesetz.']];
+      const [h,t]=pick(opts);return {html:h,lead:'Schreibe als eine Potenz:',kind:'sym',form:'nv',sol:NV+' (kein Potenzgesetz passt)',tip:()=>t};}
+    const b=ri(2,9),m=ri(2,9),n=ri(2,9),k=ri(0,3);let h,src,t;
+    if(k===0){h=`${b}<sup>${m}</sup> · ${b}<sup>${n}</sup>`;src=`${b}^(${m+n})`;t='Gleiche Basis multiplizieren: Exponenten <b>addieren</b>.';}
+    else if(k===1){const M=n+ri(2,6);h=`${b}<sup>${M}</sup> : ${b}<sup>${n}</sup>`;src=`${b}^(${M-n})`;t='Gleiche Basis dividieren: Exponenten <b>subtrahieren</b>.';}
+    else if(k===2){const mm=ri(2,5),nn=ri(2,4);h=`(${b}<sup>${mm}</sup>)<sup>${nn}</sup>`;src=`${b}^(${mm*nn})`;t='Potenz einer Potenz: Exponenten <b>multiplizieren</b>.';}
+    else{const c=ri(2,5),bb=ri(2,5),e=ri(2,6);h=`${bb}<sup>${e}</sup> · ${c}<sup>${e}</sup>`;src=`${bb*c}^${e}`;t='Gleicher Exponent: Basen multiplizieren, Exponent bleibt: a<sup>n</sup> · b<sup>n</sup> = (a · b)<sup>n</sup>.';}
+    const ast=parseTerm(src);
+    return {html:h,lead:'Schreibe als eine Potenz:',kind:'sym',form:'onepow',a:ast,ans:src,sol:prettyIn(src),tip:()=>t};
+  }
+  if(lvl===3){                                 // Potenzgesetze mit Variablen
+    const [p,q]=pick([['x','y'],['a','b'],['m','n']]);
+    if(RND()<nvChance){const m=ri(2,5),n=ri(2,5);if(m===n)return genPO(lvl);
+      const P_i=`<i>${p}</i>`,Q_i=`<i>${q}</i>`;const opts=[[`${P_i}<sup>${m}</sup> + ${P_i}<sup>${n}</sup>`,'Summanden mit verschiedenen Exponenten sind <b>nicht gleichartig</b> – man kann sie nicht zusammenfassen.'],
+        [`${P_i}<sup>${m}</sup> + ${Q_i}<sup>${n}</sup>`,'Verschiedene Variablen kann man nicht zusammenfassen.'],
+        [`${P_i}<sup>${m}</sup> · ${Q_i}<sup>${n}</sup>`,'Verschiedene Basis und verschiedener Exponent: Das Produkt ist schon so einfach wie möglich.']];
+      const [h,t]=pick(opts);return {html:h,lead:'Vereinfache:',kind:'sym',form:'nv',sol:NV,tip:()=>t};}
+    const k=ri(0,5),m=ri(2,7),n=ri(2,7),c1=ri(2,6),c2=ri(2,6);let src,h,t;
+    if(k===0){src=`${c1}${p}^${m}*${c2}${p}^${n}`;h=`${c1}<i>${p}</i><sup>${m}</sup> · ${c2}<i>${p}</i><sup>${n}</sup>`;t='Zahlen multiplizieren, bei gleicher Basis die Exponenten <b>addieren</b>.';}
+    else if(k===1){const M=m+ri(1,4);src=`${p}^${M}/${p}^${n}`;h=fr(`<i>${p}</i><sup>${M}</sup>`,`<i>${p}</i><sup>${n}</sup>`);t='Gleiche Basis dividieren: Exponenten <b>subtrahieren</b>.';}
+    else if(k===2){src=`(${p}^${m})^${ri(2,4)}`;const e=src.match(/\)\^(\d)/)[1];h=`(<i>${p}</i><sup>${m}</sup>)<sup>${e}</sup>`;t='Potenz einer Potenz: Exponenten <b>multiplizieren</b>.';}
+    else if(k===3){const e=ri(2,3);src=`(${c1}${p}^${m})^${e}`;h=`(${c1}<i>${p}</i><sup>${m}</sup>)<sup>${e}</sup>`;t='Jeder Faktor in der Klammer wird potenziert: (a · b)<sup>n</sup> = a<sup>n</sup> · b<sup>n</sup>.';}
+    else if(k===4){const e=ri(2,4);src=`(${p}^${m}${q})^${e}`;h=`(<i>${p}</i><sup>${m}</sup><i>${q}</i>)<sup>${e}</sup>`;t='Jeder Faktor in der Klammer wird potenziert, Exponenten multiplizieren.';}
+    else{const M=n+ri(1,4);src=`${p}^${n}/${p}^${M}`;h=fr(`<i>${p}</i><sup>${n}</sup>`,`<i>${p}</i><sup>${M}</sup>`);t='Exponenten subtrahieren. Ein negativer Exponent ist erlaubt (oder schreibe 1 : …).';}
+    const a=toPoly(parseTerm(src));
+    return {html:h,lead:'Vereinfache:',kind:'term',allowNeg:true,a,sol:polyHtml(a),tip:()=>t};
+  }
+  // Niveau 4: Variable im Exponenten
+  const b=pick([2,3,5]),v='n';
+  if(RND()<nvChance){const c=pick([2,3,5].filter(x=>x!==b));
+    const opts=[[`${b}<sup>n</sup> + ${c}<sup>n</sup>`,'Verschiedene Basen: Diese Summe kann man nicht zusammenfassen.'],[`${b}<sup>n</sup> + ${b}<sup>2n</sup>`,'Verschiedene Exponenten: Die Summanden sind nicht gleichartig.']];
+    const [h,t]=pick(opts);return {html:h,lead:'Schreibe als eine Potenz:',kind:'sym',form:'nv',sol:NV,tip:()=>t};}
+  const k=ri(0,7);let h,src,form='onepow',t;
+  if(k===0){const e=ri(2,5);h=`${b}<sup>n</sup> · ${b}<sup>${e}</sup>`;src=`${b}^(n+${e})`;t='Gleiche Basis: Exponenten addieren: n + '+e+'.';}
+  else if(k===1){h=`${b}<sup>n</sup> · ${b}<sup>n+1</sup>`;src=`${b}^(2n+1)`;t='Exponenten addieren: n + (n + 1) = 2n + 1.';}
+  else if(k===2){h=`${b}<sup>2n</sup> : ${b}<sup>n</sup>`;src=`${b}^n`;t='Exponenten subtrahieren: 2n − n = n.';}
+  else if(k===3){h=`(${b}<sup>n</sup>)<sup>2</sup>`;src=`${b}^(2n)`;t='Exponenten multiplizieren: n · 2 = 2n.';}
+  else if(k===4){h=`${b}<sup>n</sup> + ${b}<sup>n</sup>`+(b===2?'':` + ${b===3?b+'<sup>n</sup>':b+'<sup>n</sup> + '+b+'<sup>n</sup> + '+b+'<sup>n</sup>'}`);src=`${b}^(n+1)`;t=`${b===2?2:b} gleiche Summanden: ${b} · ${b}<sup>n</sup> = ${b}<sup>n+1</sup>.`;}
+  else if(k===5){h=`2<sup>n</sup> + 2<sup>n</sup> + 2<sup>n+1</sup>`;src='2^(n+2)';t='2<sup>n</sup> + 2<sup>n</sup> = 2 · 2<sup>n</sup> = 2<sup>n+1</sup>. Dann 2<sup>n+1</sup> + 2<sup>n+1</sup> = 2<sup>n+2</sup>.';}
+  else if(k===6){h=`${b}<sup>n+1</sup> − ${b}<sup>n</sup>`;src=`${b-1}*${b}^n`;form='coefpow';t=`${b}<sup>n+1</sup> = ${b} · ${b}<sup>n</sup>. Also ${b} · ${b}<sup>n</sup> − 1 · ${b}<sup>n</sup> = ${b-1} · ${b}<sup>n</sup>.`;if(b===2){src='2^n';form='onepow';}}
+  else{h=`${b} · ${b}<sup>n</sup>`;src=`${b}^(n+1)`;t=`${b} = ${b}<sup>1</sup>. Exponenten addieren.`;}
+  return {html:h,lead:form==='onepow'?'Schreibe als eine Potenz:':'Fasse zusammen (Zahl · Potenz):',kind:'sym',form,a:parseTerm(src),ans:src,sol:prettyIn(src),tip:()=>t};
+}
+function symFormIssue(ast,form){
+  const powOk=n=>{if(n.t!=='pow')return false;if(!(n.base.t==='num'||n.base.t==='var'||n.base.t==='grp'))return false;
+    if(n.e!==null&&n.e!==undefined)return n.e!==1&&n.e!==0;
+    try{const ex=n.ex.t==='grp'?n.ex.node:n.ex;return simplifyIssues(ex).length===0;}catch(e){return false;}};
+  if(form==='onepow')return powOk(ast)?'':'Schreibe das Ergebnis als <b>eine Potenz</b> (Basis<sup>Exponent</sup>) und fasse den Exponenten zusammen.';
+  if(form==='coefpow'){if(powOk(ast))return '';if(ast.t==='prod'&&ast.f.length===2&&ast.f.every(f=>f.op!=='/')&&((ast.f[0].node.t==='num'&&powOk(ast.f[1].node))||(ast.f[1].node.t==='num'&&powOk(ast.f[0].node))))return '';return 'Fasse zusammen zu <b>Zahl · Potenz</b>, z. B. 2 · 3<sup>n</sup>.';}
+  return '';
 }
 
 
@@ -1168,7 +1445,7 @@ const mmss=s=>{s=Math.max(0,Math.round(s||0));return Math.floor(s/60)+':'+String
 const plainT=s=>{const d=document.createElement('div');d.innerHTML=String(s==null?'':s).replace(/<span class="fr"><span>(.*?)<\/span><span>(.*?)<\/span><\/span>/g,'$1/$2').replace(/<sup>(.*?)<\/sup>/g,'^$1');return (d.textContent||'').replace(/\s+/g,' ').trim();};
 
 /* ---------- Zustand ---------- */
-function fresh(){return {app:APP_ID,name:'',klasse:'',sel:{area:'N',lvl:1,ops:['+','-','*',':'],n:20},cur:null,rounds:[],best:{},away:{n:0,sec:0,log:[]},created:new Date().toISOString()};}
+function fresh(){return {app:APP_ID,name:'',klasse:'',sel:{area:'N',lvl:1,dim:1,ops:['+','-','*',':'],n:20},cur:null,rounds:[],best:{},away:{n:0,sec:0,log:[]},created:new Date().toISOString()};}
 let state;
 try{state=JSON.parse(localStorage.getItem(KEY));}catch(e){}
 if(!state||state.app!==APP_ID)state=fresh();
@@ -1190,17 +1467,17 @@ function updateHeader(){const r=state.rounds.length;$('hInfo').textContent=`🏁
 /* =====================================================================
    1) Auswahl
    ===================================================================== */
-const bestKey=(a,l)=>a+l;
-function targetSec(area,lvl,ops,n){const ar=AREA(area);let s=0;for(let i=0;i<n;i++)s+=estOf(ar,lvl,ar.ops?ops[i%ops.length]:null);return Math.round(s/10)*10;}
+const bestKey=(a,l,d)=>a+l+(d&&AREA(a)&&AREA(a).dim?'-'+d:'');
+function targetSec(area,lvl,ops,n,dim){const ar=AREA(area);let s=0;for(let i=0;i<n;i++)s+=estOf(ar,lvl,ar.ops?ops[i%ops.length]:null,dim);return Math.round(s/10)*10;}
 function renderTrain(){
   if(state.cur){renderRound();return;}
   hideKpad();
   const S=state.sel,box=$('trainBox');box.innerHTML='';
-  const ar=AREA(S.area);if(S.lvl>ar.lv.length)S.lvl=1;
+  const ar=AREA(S.area);if(S.lvl>ar.lv.length)S.lvl=1;S.dim=S.dim||1;
   const c1=el('div','card');
   c1.innerHTML=`<h2 style="margin-top:0">Schnell und richtig rechnen ⚡</h2>
     <ol class="steps"><li><b>Wähle</b> unten die Aufgaben aus.</li><li><b>Mach dich bereit:</b> Papier und Stift auf den Tisch, Taschenrechner weg.</li><li>Klick auf <b>▶ Start</b>. Die <b>Zeit läuft</b>. Du siehst alle Aufgaben auf einmal.</li><li>Wenn du fertig bist: <b>✅ Auswerten</b>. Erst dann siehst du, was richtig ist.</li><li><b>Verbessere</b> deine Fehler. Erst danach kannst du eine neue Runde starten.</li></ol>
-    <div class="warn">👀 <b>Bleib auf dieser Seite!</b> Wenn du während einer Runde in eine andere App oder einen anderen Tab wechselst, wird das gespeichert und deiner Lehrkraft gemeldet. <span class="en">(stay on this page)</span></div>`;
+    <div class="warn">👀 <b>Bleib während einer Runde auf dieser Seite!</b> Wenn du beim Rechnen oder Verbessern in eine andere App oder einen anderen Tab wechselst, wird das gespeichert und deiner Lehrkraft gemeldet. <span class="en">(stay on this page)</span></div>`;
   box.appendChild(c1);
   if(!Cloud.active()){
     const cn=el('div','card',`<h3>Wer bist du?</h3><div class="row"><b style="min-width:80px">Name:</b><input type="text" id="inName" style="width:260px" placeholder="Vorname Nachname"></div><div class="row"><b style="min-width:80px">Klasse:</b><input type="text" id="inKlasse" style="width:100px" placeholder="6b"></div>`);
@@ -1209,28 +1486,34 @@ function renderTrain(){
   }
   const c2=el('div','card');
   c2.innerHTML='<h3>1. Was möchtest du trainieren?</h3>';
-  [['zahlen','Rechnen mit Zahlen'],['algebra','Terme und Gleichungen']].forEach(([g,t])=>{
+  GROUPS.forEach(([g,t])=>{
     c2.appendChild(el('div','lblh',t));
     const gr=el('div','agrid');
     AREAS.filter(a=>a.grp===g).forEach(a=>{
-      const best=a.lv.map((_,i)=>state.best[bestKey(a.id,i+1)]).map((b,i)=>b?`N${i+1}: ${b.s}/${b.n} in ${mmss(b.t)}`:'').filter(Boolean).join(' · ');
+      const best=Object.keys(state.best).filter(k=>k.replace(/[0-9-]+$/,'')===a.id).map(k=>{const b=state.best[k];return `N${k.slice(a.id.length)}: ${b.s}/${b.n} in ${mmss(b.t)}`;}).join(' · ');
       const b=el('button','acard'+(S.area===a.id?' sel':''),`<div class="ai">${a.ic}</div><div class="an">${a.name}</div><div class="ak">${a.kl} · ${a.lv.length} Niveaus</div>${best?`<div class="ab">🏆 ${best}</div>`:''}`);
-      b.onclick=()=>{S.area=a.id;S.lvl=1;save();renderTrain();};gr.appendChild(b);});
+      b.onclick=()=>{S.area=a.id;S.lvl=1;S.dim=1;if(a.n)S.n=a.n;save();renderTrain();};gr.appendChild(b);});
     c2.appendChild(gr);});
   box.appendChild(c2);
   const c3=el('div','card');
   c3.innerHTML=`<h3>2. ${ar.ic} ${ar.name}: Niveau und Anzahl</h3><div class="lblh">Niveau</div>`;
   const lv=el('div','opts');ar.lv.forEach((t,i)=>{const b=el('button','opt'+(S.lvl===i+1?' sel':''),`Niveau ${i+1}<small>${t}</small>`);b.onclick=()=>{S.lvl=i+1;save();renderTrain();};lv.appendChild(b);});c3.appendChild(lv);
+  if(ar.dim){c3.appendChild(el('div','lblh',ar.dim.name));const dm=el('div','opts');ar.dim.lv.forEach((t,i)=>{const b=el('button','opt'+(S.dim===i+1?' sel':''),t);b.onclick=()=>{S.dim=i+1;save();renderTrain();};dm.appendChild(b);});c3.appendChild(dm);}
   if(ar.ops){c3.appendChild(el('div','lblh','Rechenarten'));const op=el('div','opts');
     [['alle',OPLIST],['+ Addition',['+']],['− Subtraktion',['-']],['· Multiplikation',['*']],[': Division',[':']]].forEach(([t,o])=>{
       const on=JSON.stringify(S.ops)===JSON.stringify(o);const b=el('button','opt'+(on?' sel':''),t);b.onclick=()=>{S.ops=o;save();renderTrain();};op.appendChild(b);});c3.appendChild(op);}
   c3.appendChild(el('div','lblh','Anzahl der Aufgaben'));const nn=el('div','opts');
-  [10,20,30,40].forEach(n=>{const b=el('button','opt'+(S.n===n?' sel':''),String(n));b.onclick=()=>{S.n=n;save();renderTrain();};nn.appendChild(b);});c3.appendChild(nn);
-  const ops=ar.ops?S.ops:[null],tg=targetSec(S.area,S.lvl,ops,S.n),bk=state.best[bestKey(S.area,S.lvl)];
+  [10,20,30,40,60].forEach(n=>{const b=el('button','opt'+(S.n===n?' sel':''),String(n));b.onclick=()=>{S.n=n;save();renderTrain();};nn.appendChild(b);});c3.appendChild(nn);
+  const ops=ar.ops?S.ops:[null],tg=targetSec(S.area,S.lvl,ops,S.n,S.dim),bk=state.best[bestKey(S.area,S.lvl,S.dim)];
   const how=ar.id==='T'?'Gib den vereinfachten Term ein. Potenzen mit ^ oder ² (z. B. 3x^2y), mal mit * oder ohne Zeichen. Unten erscheint ein Tastenfeld.'
     :ar.id==='Q'?'Schreibe den Term in <b>Scheitelpunktform a(x + d)² + e</b>, z. B. (x+3)^2-4.'
     :ar.id==='B'?'Gib Brüche mit Schrägstrich ein: 3/4. Gemischte Zahlen mit Leerzeichen: 1 1/2. <b>Kürze immer vollständig.</b>'
-    :ar.id==='E'?'Gib nur die Lösung für x ein (z. B. −3).':ar.id==='D'?'Gib Dezimalzahlen mit Komma ein: 3,25.':'';
+    :ar.id==='E'?'Gib nur die Lösung für x ein (z. B. −3).':ar.id==='D'?'Gib Dezimalzahlen mit Komma ein: 3,25.'
+    :ar.id==='ERG'?'Tippe die Zahlen auf dem <b>Blitz-Tastenfeld</b> unten. Mit <b>➜</b> geht es sofort zur nächsten Aufgabe.'
+    :ar.id==='PF'?'Schreibe die Primfaktoren mit · dazwischen: 2^3 · 3 · 5 oder 2 · 2 · 2 · 3 · 5.'
+    :ar.id==='AK'?'Ausklammern: Schreibe Faktor(Klammer), z. B. 4a^3(1 + 2a^2). Ausmultiplizieren: ohne Klammern.'
+    :ar.id==='PO'?'Potenzen mit ^, Exponent mit mehreren Zeichen in Klammern: 2^(n+1). Kann man nichts zusammenfassen? Tippe auf <b>✋ geht nicht</b>.'
+    :ar.id==='QW'?'Brüche mit Schrägstrich (3/4), Dezimalzahlen mit Komma (1,2).':ar.id==='GK'?'Gib nur die Zahl ein.':'';
   c3.appendChild(el('div','note',`⏱ <b>Zielzeit: ${mmss(tg)} min</b> für ${S.n} Aufgaben${bk?` · 🏆 Dein Rekord auf diesem Niveau: ${bk.s}/${bk.n} in ${mmss(bk.t)}`:''}${how?'<br>✍️ '+how:''}`));
   const st=el('div','row');st.style.justifyContent='center';st.style.marginTop='14px';
   const sb=el('button','btn green big','▶ Start – die Zeit läuft!');sb.onclick=startRound;st.appendChild(sb);c3.appendChild(st);
@@ -1239,8 +1522,8 @@ function renderTrain(){
 function startRound(){
   if(!Cloud.active()&&!state.name.trim()){toast('Bitte trage zuerst deinen Namen ein.');const i=$('inName');if(i)i.focus();return;}
   const S=state.sel,ar=AREA(S.area),ops=ar.ops?S.ops.slice():[null];
-  state.cur={id:Date.now(),area:S.area,lvl:S.lvl,ops,n:S.n,seed:(Math.random()*4e9)>>>0,start:new Date().toISOString(),phase:'run',
-    ans:Array(S.n).fill(''),ok:null,corr:Array(S.n).fill(null).map(()=>({v:'',tries:0,ok:false,shown:false})),t:Array(S.n).fill(0),away:0,awaySec:0,target:targetSec(S.area,S.lvl,ops,S.n)};
+  state.cur={id:Date.now(),area:S.area,lvl:S.lvl,dim:ar.dim?S.dim:0,ops,n:S.n,seed:(Math.random()*4e9)>>>0,start:new Date().toISOString(),phase:'run',
+    ans:Array(S.n).fill(''),ok:null,corr:Array(S.n).fill(null).map(()=>({v:'',tries:0,ok:false,shown:false})),t:Array(S.n).fill(0),away:0,awaySec:0,target:targetSec(S.area,S.lvl,ops,S.n,S.dim)};
   TASKS=null;save();renderTrain();window.scrollTo(0,0);
   setTimeout(()=>{const f=document.querySelector('.task input');if(f)f.focus();},100);
 }
@@ -1249,12 +1532,35 @@ function startRound(){
    2) Runde: rechnen, auswerten, verbessern
    ===================================================================== */
 let TASKS=null,TASKS_ID=null,TICK=null;
-function tasks(){const c=state.cur;if(!TASKS||TASKS_ID!==c.id){TASKS=makeRound(c.area,c.lvl,c.ops,c.n,c.seed);TASKS_ID=c.id;}return TASKS;}
+function tasks(){const c=state.cur;if(!TASKS||TASKS_ID!==c.id){TASKS=makeRound(c.area,c.lvl,c.ops,c.n,c.seed,c.dim);TASKS_ID=c.id;}return TASKS;}
 const elapsed=c=>((c.end?new Date(c.end):new Date())-new Date(c.start))/1000;
 /* Antwort prüfen → {ok, why (Tipp bei Fehler)} */
 function check(tk,raw){
   raw=String(raw||'').trim();
   if(!raw)return {ok:false,why:'Keine Antwort.'};
+  if(raw===NV){if(tk.form==='nv')return {ok:true};return {ok:false,why:'Hier <b>kann</b> man vereinfachen! '+tk.tip()};}
+  if(tk.form==='nv')return {ok:false,why:'Diese Aufgabe lässt sich <b>nicht</b> vereinfachen – tippe auf <b>✋ geht nicht</b>. '+tk.tip()};
+  if(tk.kind==='pf'){
+    const fs=parseFactors(raw);if(!fs)return {ok:false,why:'Schreibe die Faktoren mit · dazwischen, z. B. 2^3 · 3 · 5. '+tk.tip()};
+    const prod=fs.reduce((a,[b,e])=>a*Math.pow(b,e),1),np=[...new Set(fs.filter(([b])=>!isPrime(b)).map(([b])=>b))];
+    if(prod!==tk.a)return {ok:false,why:`Das Produkt deiner Faktoren ist ${prod}, nicht ${tk.a}. `+(np.length?`Außerdem: ${np.join(', ')} ${np.length>1?'sind keine Primzahlen':'ist keine Primzahl'}. `:'')+tk.tip()};
+    if(np.length)return {ok:false,why:`Richtig gerechnet – aber ${np.map(b=>b+' = '+fTxt(factorize(b))).join(', ')} ${np.length>1?'sind keine Primzahlen':'ist keine Primzahl'}. Zerlege weiter.`};
+    return {ok:true};
+  }
+  if(tk.kind==='sym'){
+    let ast;try{ast=parseTerm(raw);}catch(e){return {ok:false,why:'Das kann ich nicht lesen. Beispiel: 2^(n+1) oder 3^9.'};}
+    if(!sameValue(ast,tk.a))return {ok:false,why:'Das ist nicht gleich dem Ausgangsterm. '+(/\^[\w.,]+\s*[-+*·]/.test(raw)?'<b>Achtung:</b> Ein Exponent mit mehreren Teilen braucht Klammern: 2^(n+1), nicht 2^n+1. ':'')+tk.tip()};
+    const f=symFormIssue(ast,tk.form);if(f)return {ok:false,why:'Richtig gerechnet – aber: '+f};
+    return {ok:true};
+  }
+  if(tk.kind==='fac'){
+    let ast,p;try{ast=parseTerm(raw);p=toPoly(ast);}catch(e){return {ok:false,why:'Das ist kein gültiger Term. Beispiel: 4a^3(1 + 2a^2)'};}
+    if(!p.eq(tk.a))return {ok:false,why:'Dein Term ist nicht gleich dem Ausgangsterm. <b>Probe:</b> Multipliziere wieder aus. '+tk.tip()};
+    const iss=factorIssues(ast);
+    if(iss.includes('form'))return {ok:false,why:'Schreibe das Ergebnis als Produkt: <b>gemeinsamer Faktor · ( … )</b>. '+tk.tip()};
+    if(iss.length)return {ok:false,why:'Richtig – aber du kannst noch <b>mehr ausklammern</b>: '+iss.map(i=>i.startsWith('num:')?`Alle Zahlen in der Klammer sind noch durch ${i.slice(4)} teilbar.`:i.startsWith('var:')?`Alle Summanden in der Klammer enthalten noch ${prettyIn(i.slice(4))}.`:'In der Klammer sollen ganze Zahlen stehen.').join(' ')};
+    return {ok:true};
+  }
   if(tk.kind==='num'){
     const p=parseNumAns(raw);
     if(!p)return {ok:false,why:'Das ist keine gültige Zahl. Beispiele: 42 · 3,25 · 3/4 · 1 1/2'};
@@ -1284,12 +1590,12 @@ function check(tk,raw){
     else d='Es fehlt etwas. Hast du <b>jeden Summanden</b> berücksichtigt?';
     return {ok:false,why:d+' '+tk.tip()};
   }
-  const iss=simplifyIssues(ast);
+  const iss=simplifyIssues(ast,tk.allowNeg);
   if(iss.length)return {ok:false,why:'Richtig umgeformt – aber noch nicht ganz vereinfacht. '+iss.map(i=>ISSUE_TXT[i]).join(' ')};
   return {ok:true};
 }
 const AREA_OF=tk=>state.cur?state.cur.area:'';
-function shownAnswer(raw,tk){if(!String(raw||'').trim())return '<i>(leer)</i>';return tk.kind==='num'?esc(raw):prettyIn(raw);}
+function shownAnswer(raw,tk){if(!String(raw||'').trim())return '<i>(leer)</i>';if(raw===NV)return NV;return tk.kind==='num'||tk.kind==='pf'?esc(raw):prettyIn(raw);}
 
 let focusIdx=-1,focusT0=0;
 function focusStop(){if(focusIdx>=0&&focusT0&&state.cur&&state.cur.phase==='run'){state.cur.t[focusIdx]+=(Date.now()-focusT0)/1000;}focusIdx=-1;focusT0=0;}
@@ -1298,7 +1604,7 @@ function renderRound(){
   const run=c.phase==='run';
   // Leiste oben
   const bar=el('div','runbar');
-  bar.innerHTML=`<span class="clk" id="rClk">0:00</span><span class="info">Ziel ${mmss(c.target)} · ${ar.ic} ${ar.name} · Niveau ${c.lvl}</span><span class="info" id="rFill"></span><span class="grow"></span>`;
+  bar.innerHTML=`<span class="clk" id="rClk">0:00</span><span class="info">Ziel ${mmss(c.target)} · ${ar.ic} ${ar.name} · Niveau ${c.lvl}${c.dim?' · '+ar.dim.lv[c.dim-1]:''}</span><span class="info" id="rFill"></span><span class="grow"></span>`;
   box.appendChild(bar);
   const tn=el('div','timenote');tn.id='rNote';box.appendChild(tn);
   if(!run)box.appendChild(scoreCard());
@@ -1319,19 +1625,20 @@ function renderRound(){
 function taskCard(tk,i){
   const c=state.cur,run=c.phase==='run',okArr=c.ok,co=c.corr[i];
   const st=run?'':okArr[i]?'ok':co.ok?'fixed':co.shown?'shown':'bad';
-  const lead=tk.kind==='term'?'Vereinfache:':tk.kind==='qe'?'Scheitelpunktform von':c.area==='E'?'Löse die Gleichung:':'';
+  const lead=tk.lead||(tk.kind==='term'?'Vereinfache:':tk.kind==='qe'?'Scheitelpunktform von':c.area==='E'?'Löse die Gleichung:':'');
   const card=el('div','task '+st);
-  card.innerHTML=`<span class="tn">${i+1}</span>${lead?`<div class="tl">${lead}</div>`:''}<div class="tq">${tk.html}${tk.kind==='num'&&c.area!=='P'&&c.area!=='E'?' =':''}</div>`;
+  card.innerHTML=`<span class="tn">${i+1}</span>${lead?`<div class="tl">${lead}</div>`:''}<div class="tq">${tk.html}${tk.kind==='num'&&c.area!=='P'&&c.area!=='E'&&!/=\s*$/.test(tk.html)&&!tk.pad?' =':''}</div>`;
   const unit=c.area==='E'?'x =':'';
   const mkInput=(val,onIn)=>{const w=el('div','row');w.style.flexWrap='nowrap';if(unit)w.appendChild(el('b','',unit));
     const inp=el('input');inp.type='text';inp.autocomplete='off';inp.setAttribute('autocapitalize','off');inp.setAttribute('autocorrect','off');inp.spellcheck=false;
-    inp.inputMode=(c.area==='N'||c.area==='V'||(c.area==='D'))?'decimal':'text';inp.value=val||'';inp.dataset.i=i;
-    inp.oninput=()=>{onIn(inp.value);if(prev)prev.innerHTML=inp.value.trim()?'Vorschau: '+prettyIn(inp.value):'';};
+    inp.inputMode=tk.pad?'none':(c.area==='N'||c.area==='V'||c.area==='D'||c.area==='GK')?'decimal':'text';inp.value=val||'';inp.dataset.i=i;
+    inp.oninput=()=>{onIn(inp.value);if(prev)prev.innerHTML=inp.value.trim()&&inp.value!==NV?'Vorschau: '+prettyIn(inp.value):'';};
     inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const all=[...document.querySelectorAll('.task input:not([disabled])')];const k=all.indexOf(inp);if(all[k+1])all[k+1].focus();else inp.blur();}});
-    inp.addEventListener('focus',()=>{focusStop();focusIdx=i;focusT0=Date.now();if(tk.kind!=='num')showKpad(inp);else hideKpad();});
+    inp.addEventListener('focus',()=>{focusStop();focusIdx=i;focusT0=Date.now();if(tk.pad)showNpad(inp);else if(tk.kind!=='num')showKpad(inp,tk);else hideKpad();});
     inp.addEventListener('blur',()=>{focusStop();setTimeout(()=>{if(!document.activeElement||!document.activeElement.closest||!document.activeElement.closest('.task'))hideKpad();},150);});
     w.appendChild(inp);let prev=null;
-    if(tk.kind!=='num'){prev=el('div','prev');prev.innerHTML=inp.value.trim()?'Vorschau: '+prettyIn(inp.value):'';}
+    if(c.area==='PO'&&c.lvl>=2){const nb=el('button','btn sec nvb',NV);nb.type='button';nb.onclick=()=>{inp.value=NV;inp.dispatchEvent(new Event('input'));};w.appendChild(nb);}
+    if(tk.kind!=='num'&&tk.kind!=='pf'){prev=el('div','prev');prev.innerHTML=inp.value.trim()?'Vorschau: '+prettyIn(inp.value):'';}
     return {w,inp,prev};};
   if(run){
     const m=mkInput(c.ans[i],v=>{c.ans[i]=v;saveSoon();fillInfo();});card.appendChild(m.w);if(m.prev)card.appendChild(m.prev);
@@ -1367,7 +1674,7 @@ function tickRound(){
   fillInfo();
 }
 function scoreCard(){
-  const c=state.cur,sc=c.ok.filter(Boolean).length,s=elapsed(c),bk=state.best[bestKey(c.area,c.lvl)];
+  const c=state.cur,sc=c.ok.filter(Boolean).length,s=elapsed(c),bk=state.best[bestKey(c.area,c.lvl,c.dim)];
   const rec=c.record?'<div class="note">🏆 <b>Neuer Rekord!</b></div>':'';
   const slow=c.t.map((t,i)=>[t,i]).filter(x=>x[0]>=1).sort((a,b)=>b[0]-a[0]).slice(0,3).map(x=>`Nr. ${x[1]+1} (${Math.round(x[0])} s)`).join(', ');
   const box=el('div','card');
@@ -1386,8 +1693,8 @@ function finishRound(btn){
   const T=tasks();c.end=new Date().toISOString();c.sec=Math.round(elapsed(c));
   c.ok=T.map((tk,i)=>check(tk,c.ans[i]).ok);c.score=c.ok.filter(Boolean).length;
   const q=c.sec/c.target;c.slow=q>1.5?2:q>1.2?1:0;
-  const bk=state.best[bestKey(c.area,c.lvl)];
-  if(c.n>=10&&(!bk||c.score/c.n>bk.s/bk.n||(c.score/c.n===bk.s/bk.n&&c.sec<bk.t))){state.best[bestKey(c.area,c.lvl)]={s:c.score,n:c.n,t:c.sec};c.record=!!bk||c.score===c.n;}
+  const bk=state.best[bestKey(c.area,c.lvl,c.dim)];
+  if(c.n>=10&&(!bk||c.score/c.n>bk.s/bk.n||(c.score/c.n===bk.s/bk.n&&c.sec<bk.t))){state.best[bestKey(c.area,c.lvl,c.dim)]={s:c.score,n:c.n,t:c.sec};c.record=!!bk||c.score===c.n;}
   c.phase=c.ok.every(Boolean)?'done':'corr';
   recordRound();save();renderRound();window.scrollTo(0,0);
 }
@@ -1409,12 +1716,12 @@ function afterCorr(){
   if(c.ok.every((o,i)=>o||c.corr[i].ok||c.corr[i].shown)){c.phase='done';}
   recordRound();save();renderRound();
 }
-function startRoundSame(){const c=state.cur||state.rounds[state.rounds.length-1];if(c){state.sel={area:c.area,lvl:c.lvl,ops:c.ops[0]===null?state.sel.ops:c.ops,n:c.n};}startRound();}
+function startRoundSame(){const c=state.cur||state.rounds[state.rounds.length-1];if(c){state.sel={area:c.area,lvl:c.lvl,dim:c.dim||1,ops:c.ops[0]===null?state.sel.ops:c.ops,n:c.n};}startRound();}
 function endRound(){state.cur=null;TASKS=null;save();}
 /* Runde in die Liste schreiben (wird bei Verbesserungen aktualisiert) */
 function recordRound(){
   const c=state.cur,T=tasks();
-  const rec={id:c.id,area:c.area,lvl:c.lvl,ops:c.ops,n:c.n,date:c.start,sec:c.sec,target:c.target,score:c.score||0,slow:c.slow||0,away:c.away,awaySec:c.awaySec,aborted:!!c.aborted,
+  const rec={id:c.id,area:c.area,lvl:c.lvl,dim:c.dim||0,ops:c.ops,n:c.n,date:c.start,sec:c.sec,target:c.target,score:c.score||0,slow:c.slow||0,away:c.away,awaySec:c.awaySec,aborted:!!c.aborted,
     fixed:c.ok?c.corr.filter((x,i)=>!c.ok[i]&&x.ok).length:0,shown:c.ok?c.corr.filter((x,i)=>!c.ok[i]&&x.shown).length:0,done:c.phase==='done',
     wrong:c.ok?T.map((tk,i)=>c.ok[i]?null:[plainT(tk.html),String(c.ans[i]||'').slice(0,40)]).filter(Boolean).slice(0,40):[]};
   const k=state.rounds.findIndex(r=>r.id===c.id);if(k>=0)state.rounds[k]=rec;else state.rounds.push(rec);
@@ -1425,13 +1732,18 @@ function recordRound(){
 
 /* ---------- Tastenfeld für Terme ---------- */
 let KP=null,KPin=null;
-function showKpad(inp){KPin=inp;
+let KPsig='';
+function showKpad(inp,tk){KPin=inp;hideNpad();
+  const vs=tk&&tk.kind==='pf'?[]:[...new Set(((tk&&tk.html)||'').match(/<i>([a-z])<\/i>/g)||[])].map(x=>x[3]).sort();
+  const vars=tk&&tk.kind==='pf'?[]:tk&&tk.kind==='sym'?(vs.length?vs:['n']):(vs.length?vs:['x','y','a','b']);
+  const keys=vars.map(v=>[v,'v']).concat(tk&&tk.kind==='pf'?[['·',''],['^',''],['²',''],['³',''],['⌫','']]:[['²',''],['³',''],['^',''],['^( )',''],['(',''],[')',''],['/',''],['·',''],['−',''],['+',''],['⌫','']]);
+  const sig=keys.map(k=>k[0]).join('|');if(KP&&KPsig!==sig){KP.remove();KP=null;}KPsig=sig;
   if(!KP){KP=el('div','kpad');
-    const keys=[['x','v'],['y','v'],['a','v'],['b','v'],['²',''],['³',''],['^',''],['(',''],[')',''],['/',''],['·',''],['−',''],['+',''],['⌫','']];
     KP.appendChild(el('span','kh','Tasten:'));
     keys.forEach(([k,c])=>{const b=el('button',c,k);b.type='button';
       b.addEventListener('pointerdown',e=>{e.preventDefault();if(!KPin)return;const i=KPin,s=i.selectionStart??i.value.length,e2=i.selectionEnd??s;
         if(k==='⌫'){if(s===e2&&s>0){i.value=i.value.slice(0,s-1)+i.value.slice(e2);i.setSelectionRange(s-1,s-1);}else{i.value=i.value.slice(0,s)+i.value.slice(e2);i.setSelectionRange(s,s);}}
+        else if(k==='^( )'){i.value=i.value.slice(0,s)+'^()'+i.value.slice(e2);i.setSelectionRange(s+2,s+2);}
         else{const ins=k==='·'?'*':k==='−'?'-':k;i.value=i.value.slice(0,s)+ins+i.value.slice(e2);i.setSelectionRange(s+ins.length,s+ins.length);}
         i.dispatchEvent(new Event('input'));});
       KP.appendChild(b);});
@@ -1440,7 +1752,19 @@ function showKpad(inp){KPin=inp;
   KP.querySelectorAll('button.v').forEach(b=>{b.style.display='';});
   KP.classList.remove('hidden');
 }
-function hideKpad(){if(KP)KP.classList.add('hidden');KPin=null;}
+function hideKpad(){if(KP)KP.classList.add('hidden');KPin=null;hideNpad();}
+/* ---------- Blitz-Tastenfeld (Ergänzen) ---------- */
+let NP=null,NPin=null;
+function showNpad(inp){NPin=inp;if(KP)KP.classList.add('hidden');
+  if(!NP){NP=el('div','kpad np');
+    ['1','2','3','4','5','6','7','8','9',',','0','⌫','➜'].forEach(k=>{const b=el('button',k==='➜'?'go':'',k);b.type='button';
+      b.addEventListener('pointerdown',e=>{e.preventDefault();if(!NPin)return;const i=NPin;
+        if(k==='➜'){const all=[...document.querySelectorAll('.task input:not([disabled])')];const n=all[all.indexOf(i)+1];if(n){n.focus();n.scrollIntoView({block:'center',behavior:'smooth'});}else i.blur();return;}
+        if(k==='⌫')i.value=i.value.slice(0,-1);else i.value+=k;i.dispatchEvent(new Event('input'));});
+      NP.appendChild(b);});
+    document.body.appendChild(NP);}
+  NP.classList.remove('hidden');}
+function hideNpad(){if(NP)NP.classList.add('hidden');NPin=null;}
 
 /* =====================================================================
    3) Meine Runden
@@ -1451,9 +1775,9 @@ function renderHist(){
   const tot=state.rounds.filter(r=>!r.aborted),sc=tot.reduce((a,r)=>a+r.score,0),n=tot.reduce((a,r)=>a+r.n,0),tt=tot.reduce((a,r)=>a+(r.sec||0),0);
   let h=`<div class="card"><p><b>${tot.length}</b> Runden · <b>${n}</b> Aufgaben · beim ersten Versuch richtig: <b>${n?Math.round(sc/n*100):0} %</b> · Trainingszeit: <b>${mmss(tt)}</b> min${state.away.n?` · 👀 Seite verlassen: <b>${state.away.n}-mal</b>`:''}</p></div>`;
   h+='<div class="card"><h3>🏆 Meine Rekorde</h3><table><tr><th>Bereich</th>'+[1,2,3,4,5,6].map(l=>`<th>Niveau ${l}</th>`).join('')+'</tr>'+
-    AREAS.map(a=>`<tr><td style="text-align:left">${a.ic} ${a.name}</td>`+[1,2,3,4,5,6].map(l=>{if(l>a.lv.length)return '<td style="background:#f6f7fa"></td>';const b=state.best[bestKey(a.id,l)];return `<td>${b?`${b.s}/${b.n}<br><small>${mmss(b.t)}</small>`:'–'}</td>`;}).join('')+'</tr>').join('')+'</table></div>';
+    AREAS.map(a=>`<tr><td style="text-align:left">${a.ic} ${a.name}</td>`+[1,2,3,4,5,6].map(l=>{if(l>a.lv.length)return '<td style="background:#f6f7fa"></td>';const ks=Object.keys(state.best).filter(k=>k===a.id+l||k.startsWith(a.id+l+'-'));return `<td>${ks.length?ks.map(k=>{const b=state.best[k];return `${b.s}/${b.n} <small>${mmss(b.t)}${k.includes('-')?' ('+k.split('-')[1]+')':''}</small>`;}).join('<br>'):'–'}</td>`;}).join('')+'</tr>').join('')+'</table></div>';
   h+='<div class="card"><h3>Alle Runden</h3><table><tr><th>Datum</th><th>Bereich</th><th>Niveau</th><th>Richtig</th><th>Zeit / Ziel</th><th>Verbessert</th><th>👀</th></tr>'+
-    R.slice(0,60).map(r=>{const a=AREA(r.area);return `<tr><td>${new Date(r.date).toLocaleDateString('de-DE')} ${new Date(r.date).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}</td><td style="text-align:left">${a.ic} ${a.name}</td><td>${r.lvl}</td><td>${r.aborted?'abgebrochen':`${r.score} / ${r.n}`}</td><td>${mmss(r.sec)} / ${mmss(r.target)}${r.slow===2?' ⏰':''}</td><td>${r.aborted?'–':r.done?(r.fixed+(r.shown?` (+${r.shown} 👀)`:''))+' ✅':'noch nicht'}</td><td>${r.away||''}</td></tr>`;}).join('')+'</table></div>';
+    R.slice(0,60).map(r=>{const a=AREA(r.area);return `<tr><td>${new Date(r.date).toLocaleDateString('de-DE')} ${new Date(r.date).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}</td><td style="text-align:left">${a.ic} ${a.name}</td><td>${r.lvl}${r.dim?'·'+r.dim:''}</td><td>${r.aborted?'abgebrochen':`${r.score} / ${r.n}`}</td><td>${mmss(r.sec)} / ${mmss(r.target)}${r.slow===2?' ⏰':''}</td><td>${r.aborted?'–':r.done?(r.fixed+(r.shown?` (+${r.shown} 👀)`:''))+' ✅':'noch nicht'}</td><td>${r.away||''}</td></tr>`;}).join('')+'</table></div>';
   box.innerHTML=h;
 }
 
@@ -1461,16 +1785,17 @@ function renderHist(){
    👀 Seite verlassen
    ===================================================================== */
 let AWAY_IGNORE=false,AWAY_T0=0,AWAY_HID=false,AWAY_RUN=false;
-function awayStart(hidden){if(camActive())return;if(AWAY_IGNORE)return;if(hidden)AWAY_HID=true;if(AWAY_T0)return;AWAY_T0=Date.now();AWAY_RUN=!!(state.cur&&state.cur.phase==='run');focusStop();}
+function awayStart(hidden){if(camActive())return;if(AWAY_IGNORE)return;if(hidden)AWAY_HID=true;if(AWAY_T0)return;AWAY_T0=Date.now();AWAY_RUN=!!(state.cur&&(state.cur.phase==='run'||state.cur.phase==='corr'));focusStop();}
 function awayEnd(){
   if(!AWAY_T0)return;
   if(document.visibilityState==='hidden'||!document.hasFocus())return;
   const sec=(Date.now()-AWAY_T0)/1000,hid=AWAY_HID;AWAY_T0=0;AWAY_HID=false;
   if(AWAY_IGNORE||camActive()){AWAY_IGNORE=false;return;}
   if(sec<(hid?1:3))return;
-  const A=state.away;A.n++;A.sec=Math.round(A.sec+sec);A.log.push([new Date().toISOString().slice(0,16),Math.round(sec),AWAY_RUN?'Runde':'Menü']);if(A.log.length>40)A.log=A.log.slice(-40);
-  if(AWAY_RUN&&state.cur){state.cur.away++;state.cur.awaySec=Math.round(state.cur.awaySec+sec);}
-  save();awayAlarm(sec,AWAY_RUN);
+  if(!AWAY_RUN)return;                       // nur beim Rechnen und Verbessern melden
+  const A=state.away;A.n++;A.sec=Math.round(A.sec+sec);A.log.push([new Date().toISOString().slice(0,16),Math.round(sec),state.cur&&state.cur.phase==='corr'?'Verbessern':'Runde']);if(A.log.length>40)A.log=A.log.slice(-40);
+  if(state.cur){state.cur.away++;state.cur.awaySec=Math.round(state.cur.awaySec+sec);}
+  save();awayAlarm(sec,true);
 }
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')awayStart(true);else setTimeout(awayEnd,300);});
 window.addEventListener('blur',()=>awayStart(false));
@@ -1501,7 +1826,7 @@ function cloudSummary(){
   const n=R.reduce((a,r)=>a+r.n,0),sc=R.reduce((a,r)=>a+r.score,0),tt=R.reduce((a,r)=>a+(r.sec||0),0);
   return {stars:sc,max:n,err:n-sc,done:R.filter(r=>r.done).length,n:R.length,tasks:T,
     labels:{sterne:'✅ richtig (1. Versuch)',max:'Aufgaben',fehler:'❌ falsch',erledigt:'Runden verbessert'},
-    extra:{last:['Letzte Runde',last?`${AREA(last.area).name} N${last.lvl} · ${last.score}/${last.n} · ⏱${mmss(last.sec)}/${mmss(last.target)}${last.away?' · 👀'+last.away:''}${last.done?' · verbessert':' · Verbesserung offen'}`:'–'],
+    extra:{last:['Letzte Runde',last?`${AREA(last.area).name} N${last.lvl}${last.dim?'.'+last.dim:''} · ${last.score}/${last.n} · ⏱${mmss(last.sec)}/${mmss(last.target)}${last.away?' · 👀'+last.away:''}${last.done?' · verbessert':' · Verbesserung offen'}`:'–'],
       rounds:['Runden',`${R.length} · Σ ${mmss(tt)} min`],best:['🏆 Rekorde',best],
       away:['🚪 Seite verlassen',state.away.n?state.away.n+'× · '+mmss(state.away.sec):'–'],
       slow:['⏰ zu langsam',R.length?R.filter(r=>r.slow===2).length+' von '+R.length+' Runden':'–'],
@@ -1576,6 +1901,16 @@ window.DFU=(function(){
     ['probe','Probe','die','','check (by substituting)','t','Probe'],
     ['qerg','quadratische Ergänzung','die','','completing the square','t','quadratische Ergänzung|quadratisch ergänzen'],
     ['scheitel','Scheitelpunktform','die','','vertex form','t','Scheitelpunktform'],
+    ['wurzel','Wurzel','die','die Wurzeln','root','w','Wurzel|Wurzeln|Quadratwurzel'],
+    ['quadratzahl','Quadratzahl','die','die Quadratzahlen','square number','w','Quadratzahl|Quadratzahlen|Quadrieren|quadriere'],
+    ['kubikzahl','Kubikzahl','die','die Kubikzahlen','cube number','w','Kubikzahl|Kubikzahlen'],
+    ['primzahl','Primzahl','die','die Primzahlen','prime number','w','Primzahl|Primzahlen'],
+    ['primfaktor','Primfaktor','der','die Primfaktoren','prime factor','w','Primfaktor|Primfaktoren|Primfaktorzerlegung'],
+    ['faktor','Faktor','der','die Faktoren','factor','w','Faktor|Faktoren'],
+    ['teiler','Teiler','der','die Teiler','divisor','w','Teiler|ggT'],
+    ['vielfaches','Vielfache','das','die Vielfachen','multiple','w','Vielfache|Vielfaches|kgV'],
+    ['ausklammern','ausklammern','','','to factor out','w','ausklammern|Klammere|ausgeklammert|Ausklammern'],
+    ['ergaenzen','ergänzen','','','to complete (to 10, 100 …)','w','ergänzen|Ergänze|Ergänzen'],
     ['berechnen','berechnen','','','calculate','o','berechnen|berechne|rechnen|rechne|Rechne','Mit Zahlen ein Ergebnis ausrechnen.'],
     ['vereinfachen','vereinfachen','','','simplify','o','vereinfachen|Vereinfache|vereinfacht','Einen Term so kurz wie möglich schreiben.'],
     ['loesen','lösen','','','solve','o','lösen|Löse','Die Zahl für x finden, die die Gleichung wahr macht.'],
@@ -1583,7 +1918,7 @@ window.DFU=(function(){
     ['verbessern','verbessern','','','correct (your mistakes)','o','verbessern|Verbessere|Verbesserung|verbessert','Fehler finden und richtig machen.'],
     ['auswerten','auswerten','','','evaluate, mark','o','auswerten|Auswerten','Nachsehen, was richtig und was falsch ist.']
   ];
-  const KAT={z:'Zahlen und Rechenarten',p:'Prozentrechnung',b:'Brüche und Dezimalzahlen',t:'Terme und Gleichungen',o:'Arbeitsaufträge (Operatoren)'};
+  const KAT={z:'Zahlen und Rechenarten',p:'Prozentrechnung',b:'Brüche und Dezimalzahlen',t:'Terme und Gleichungen',w:'Potenzen, Wurzeln, Teilbarkeit',o:'Arbeitsaufträge (Operatoren)'};
   const BY={};W.forEach(w=>BY[w[0]]=w);
   const FORM={};W.forEach(w=>w[6].split('|').forEach(f=>FORM[f.toLowerCase()]=w[0]));
   const L='A-Za-zÄÖÜäöüß';

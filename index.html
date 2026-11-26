@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rechentrainer (Klasse 5–8)</title>
+<title>Rechentrainer (Klasse 5–9)</title>
 <style>
 :root{--bg:#f4f6fb;--ink:#1d2433;--muted:#5b6475;--accent:#f2b705;--accent2:#2563eb;--ok:#16a34a;--bad:#dc2626;--line:#dde3ee}
 *{box-sizing:border-box}
@@ -128,7 +128,7 @@ body.dfu-off .dfu{text-decoration:none;cursor:inherit}
 <body>
 <div class="top">
 <header>
-  <h1>⚡ Rechentrainer <span style="font-weight:400;font-size:15px;opacity:.8">Klasse 5–8</span></h1>
+  <h1>⚡ Rechentrainer <span style="font-weight:400;font-size:15px;opacity:.8">Klasse 5–9</span></h1>
   <div class="hright">
     <span class="chip" id="hInfo">0 Runden</span>
     <span class="cstat" id="cloudStatus"></span>
@@ -1437,7 +1437,7 @@ function awayAlarm(sec, inTest) {
 /* =====================================================================
    Rechentrainer – Ablauf: bereit machen → Start → rechnen → auswerten → verbessern → neue Runde
    ===================================================================== */
-const APP_ID='rechentrainer',KEY='rechentrainer_v1',TITEL='Rechentrainer (Klasse 5–8)';
+const APP_ID='rechentrainer',KEY='rechentrainer_v1',TITEL='Rechentrainer (Klasse 5–9)';
 const $=id=>document.getElementById(id);
 function el(t,c,h){const e=document.createElement(t);if(c)e.className=c;if(h!==undefined)e.innerHTML=h;return e;}
 function toast(t,ms){const d=el('div','toast',t);document.body.appendChild(d);setTimeout(()=>d.remove(),ms||3500);}

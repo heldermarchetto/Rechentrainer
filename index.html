@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rechentrainer (Klasse 5–9)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" media="print" onload="this.media='all'">
+<script async src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" onload="window.KX_READY&&window.KX_READY()"></script>
 <style>
 :root{--bg:#f4f6fb;--ink:#1d2433;--muted:#5b6475;--accent:#f2b705;--accent2:#2563eb;--ok:#16a34a;--bad:#dc2626;--line:#dde3ee}
 *{box-sizing:border-box}
@@ -124,6 +126,7 @@ body.dfu-off .dfu{text-decoration:none;cursor:inherit}
 .nvb{white-space:nowrap;font-size:15px;padding:7px 10px}
 .acard .ai{font-weight:700}
 .task .mu{font-size:19px;white-space:nowrap}
+.tq .katex{font-size:1.12em}.res .katex,.prev .katex{font-size:1.05em}.tq .katex-display{margin:0}
 </style>
 </head>
 <body>
@@ -875,6 +878,62 @@ function evalA(n,env){
 const ENVS=[{n:1,m:2,k:3,x:2,y:3,a:3,b:5,r:2,s:7,t:3},{n:2,m:3,k:1,x:3,y:2,a:2,b:3,r:5,s:2,t:4},{n:3,m:1,k:2,x:5,y:7,a:7,b:2,r:3,s:3,t:2},{n:5,m:4,k:4,x:1.5,y:2.5,a:1.2,b:0.7,r:1.1,s:1.3,t:0.9}];
 function sameValue(a,b){return ENVS.every(e=>{const u=evalA(a,e),v=evalA(b,e);if(!isFinite(u)||!isFinite(v))return isFinite(u)===isFinite(v);return Math.abs(u-v)<=1e-9*Math.max(1,Math.abs(u),Math.abs(v));});}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+/* =====================================================================
+   Schöne Formeln mit KaTeX (LaTeX). Die Aufgaben-HTML (Brüche, Wurzeln, Hochzahlen)
+   wird in LaTeX übersetzt. Ohne KaTeX (z. B. offline) bleibt die alte Darstellung.
+   ===================================================================== */
+const TEX_L='A-Za-zÄÖÜäöüß';
+function texify(html,o){
+  o=o||{};
+  const tpl=document.createElement('template');tpl.innerHTML=html;
+  const escT=s=>s.replace(/[\\{}%&#_$]/g,c=>c==='\\'?'\\textbackslash{}':'\\'+c);
+  const MAP={'·':'\\cdot ','×':'\\cdot ','⋅':'\\cdot ','*':'\\cdot ','−':'-','–':'-',':':'\\mathbin{:}','%':'\\%','²':'^{2}','³':'^{3}','≈':'\\approx ','→':'\\rightarrow ','\u202f':'\\,','\u00a0':' ','…':'\\dots ','€':'\\text{€}','<':'<','>':'>'};
+  function txt(s){
+    let out='',i=0;
+    while(i<s.length){
+      const c=s[i];
+      if(new RegExp('['+TEX_L+']').test(c)){
+        const isL=ch=>new RegExp('['+TEX_L+']').test(ch||'');
+        let j=i;while(j<s.length&&isL(s[j]))j++;
+        if(!o.units&&j-i===1){out+=s[i];i=j;continue;}            // einzelner Buchstabe = Variable (kursiv)
+        if(!o.units){for(;;){const m=s.slice(j).match(new RegExp('^([ \\u00a0]+['+TEX_L+']{2,}|[?!.](?=\\s|$))'));if(!m)break;j+=m[0].length;}}
+        const w=s.slice(i,j),pre=i>0&&/\s/.test(s[i-1])?' ':'',post=/\s/.test(s[j]||'')?' ':'';
+        out+='\\text{'+pre+escT(w)+post+'}';
+        i=j;continue;}
+      if(c===','&&/\d/.test(s[i-1]||'')&&/\d/.test(s[i+1]||'')){out+='{,}';i++;continue;}
+      if(c===';'){out+=';\\,';i++;continue;}
+      if(c in MAP){out+=MAP[c];i++;continue;}
+      if(/[0-9+\-=()[\]\/?.!\s|]/.test(c)){out+=c;i++;continue;}
+      throw new Error('Zeichen '+c);   // z. B. Emoji, € → alte Darstellung
+    }
+    return out;
+  }
+  function walk(n){
+    if(n.nodeType===3)return txt(n.nodeValue);
+    if(n.nodeType!==1)return '';
+    const kids=()=>[...n.childNodes].map(walk).join('');
+    const tag=n.tagName.toLowerCase(),cl=n.classList;
+    if(tag==='sup')return '^{'+kids()+'}';
+    if(tag==='sub')return '_{'+kids()+'}';
+    if(tag==='br')throw new Error('br');
+    if(cl.contains('fr')){const e=[...n.children];return '\\frac{'+walk(e[0])+'}{'+walk(e[1])+'}';}
+    if(cl.contains('sq')){const idx=n.querySelector('sup.ri'),rad=[...n.children].filter(x=>x.tagName.toLowerCase()==='span').pop();
+      return '\\sqrt'+(idx?'['+idx.textContent+']':'')+'{'+(rad?walk(rad):'')+'}';}
+    if(cl.contains('gap'))return '\\boxed{\\,?\\,}';
+    return kids();
+  }
+  let tex=[...tpl.content.childNodes].map(walk).join('');
+  // Klammern so groß wie der Inhalt (wenn sie paarweise stehen)
+  if(/\\frac|\\sqrt/.test(tex)){let d=0,ok=true;for(const c of tex){if(c==='(')d++;else if(c===')'){d--;if(d<0)ok=false;}}
+    if(ok&&d===0)tex=tex.replace(/\(/g,'\\left(').replace(/\)/g,'\\right)');}
+  return tex;
+}
+/* HTML → KaTeX-HTML; bei Problemen die alte HTML-Darstellung */
+function TX(html,o){
+  if(!window.katex||html==null||html==='')return html;
+  try{return katex.renderToString('\\displaystyle '+texify(String(html),o),{throwOnError:true,strict:'ignore',output:'html'});}
+  catch(e){return html;}
+}
 /* =====================================================================
    Aufgaben-Generatoren
    Jede Aufgabe: {html, kind:'num'|'term'|'qe', a (Q oder P), want:'int'|'dec'|'frac'|'any',
@@ -1724,7 +1783,11 @@ function check(tk,raw){
   return {ok:true};
 }
 const AREA_OF=tk=>state.cur?state.cur.area:'';
-function shownAnswer(raw,tk){if(!String(raw||'').trim())return '<i>(leer)</i>';if(raw===NV)return NV;return tk.kind==='num'||tk.kind==='pf'||tk.kind==='mix'?esc(raw)+(tk.unit&&!/[a-z²³]\s*$/i.test(raw)?' '+tk.unit:''):prettyIn(raw);}
+function shownAnswer(raw,tk){if(!String(raw||'').trim())return '<i>(leer)</i>';if(raw===NV)return NV;
+  const o={units:!!(tk.unit||tk.kind==='mix')};
+  if(tk.kind==='num'||tk.kind==='mix'){const h=esc(raw).replace(/(\d+)\s*\/\s*(\d+)/g,(m,x,y)=>fr(x,y))+(tk.unit&&!/[a-z²³]\s*$/i.test(raw)?' '+tk.unit:'');return TX(h,o);}
+  return TX(prettyIn(raw),o);}
+const TXO=tk=>({units:!!(tk.unit||tk.kind==='mix'||(state.cur&&AREA(state.cur.area).grp==='groessen'))});
 
 let focusIdx=-1,focusT0=0;
 function focusStop(){if(focusIdx>=0&&focusT0&&state.cur&&state.cur.phase==='run'){state.cur.t[focusIdx]+=(Date.now()-focusT0)/1000;}focusIdx=-1;focusT0=0;}
@@ -1759,18 +1822,18 @@ function taskCard(tk,i){
   const st=run?'':okArr[i]?'ok':co.ok?'fixed':co.shown?'shown':'bad';
   const lead=tk.lead||(tk.kind==='term'?'Vereinfache:':tk.kind==='qe'?'Scheitelpunktform von':c.area==='E'?'Löse die Gleichung:':'');
   const card=el('div','task '+st);
-  card.innerHTML=`<span class="tn">${i+1}</span>${lead?`<div class="tl">${lead}</div>`:''}<div class="tq">${tk.html}${tk.kind==='num'&&c.area!=='P'&&c.area!=='E'&&!/=\s*$/.test(tk.html)&&!tk.pad&&!tk.unit&&tk.kind!=='mix'?' =':''}</div>`;
+  card.innerHTML=`<span class="tn">${i+1}</span>${lead?`<div class="tl">${lead}</div>`:''}<div class="tq">${TX(`${tk.html}${tk.kind==='num'&&c.area!=='P'&&c.area!=='E'&&!/=\s*$/.test(tk.html)&&!tk.pad&&!tk.unit&&tk.kind!=='mix'?' =':''}`,TXO(tk))}</div>`;
   const unit=c.area==='E'?'x =':'';
   const mkInput=(val,onIn)=>{const w=el('div','row');w.style.flexWrap='nowrap';if(unit)w.appendChild(el('b','',unit));
     const inp=el('input');inp.type='text';inp.autocomplete='off';inp.setAttribute('autocapitalize','off');inp.setAttribute('autocorrect','off');inp.spellcheck=false;
     inp.inputMode=tk.pad?'none':(c.area==='N'||c.area==='V'||c.area==='D'||c.area==='GK'||tk.unit)?'decimal':'text';if(tk.ph)inp.placeholder=tk.ph;inp.value=val||'';inp.dataset.i=i;
-    inp.oninput=()=>{onIn(inp.value);if(prev)prev.innerHTML=inp.value.trim()&&inp.value!==NV?'Vorschau: '+prettyIn(inp.value):'';};
+    inp.oninput=()=>{onIn(inp.value);if(prev)prev.innerHTML=inp.value.trim()&&inp.value!==NV?'Vorschau: '+TX(prettyIn(inp.value),TXO(tk)):'';};
     inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const all=[...document.querySelectorAll('.task input:not([disabled])')];const k=all.indexOf(inp);if(all[k+1])all[k+1].focus();else inp.blur();}});
     inp.addEventListener('focus',()=>{focusStop();focusIdx=i;focusT0=Date.now();if(tk.pad)showNpad(inp);else if(tk.kind!=='num'&&tk.kind!=='mix')showKpad(inp,tk);else hideKpad();});
     inp.addEventListener('blur',()=>{focusStop();setTimeout(()=>{if(!document.activeElement||!document.activeElement.closest||!document.activeElement.closest('.task'))hideKpad();},150);});
     w.appendChild(inp);if(tk.unit)w.appendChild(el('b','mu',tk.unit));let prev=null;
     if(c.area==='PO'&&c.lvl>=2){const nb=el('button','btn sec nvb',NV);nb.type='button';nb.onclick=()=>{inp.value=NV;inp.dispatchEvent(new Event('input'));};w.appendChild(nb);}
-    if(tk.kind!=='num'&&tk.kind!=='pf'&&tk.kind!=='mix'){prev=el('div','prev');prev.innerHTML=inp.value.trim()?'Vorschau: '+prettyIn(inp.value):'';}
+    if(tk.kind!=='num'&&tk.kind!=='pf'&&tk.kind!=='mix'){prev=el('div','prev');prev.innerHTML=inp.value.trim()?'Vorschau: '+TX(prettyIn(inp.value),TXO(tk)):'';}
     return {w,inp,prev};};
   if(run){
     const m=mkInput(c.ans[i],v=>{c.ans[i]=v;saveSoon();fillInfo();});card.appendChild(m.w);if(m.prev)card.appendChild(m.prev);
@@ -1780,7 +1843,7 @@ function taskCard(tk,i){
     if(c.t[i]>=1)card.appendChild(el('div','ttime',`⏱ ca. ${Math.round(c.t[i])} s`));
     if(!okArr[i]){
       if(co.ok)card.appendChild(el('div','res',`✅ Verbessert: ${shownAnswer(co.v,tk)}`));
-      else if(co.shown)card.appendChild(el('div','res',`👀 Lösung: ${tk.sol}`));
+      else if(co.shown)card.appendChild(el('div','res',`👀 Lösung: ${TX(tk.sol,TXO(tk))}`));
       else{
         const r=check(tk,co.tries?co.v:a);
         card.appendChild(el('div','tip','💡 '+r.why));
@@ -1979,6 +2042,9 @@ Cloud.init({app:APP_ID,titel:TITEL,getState:serverState,hasProgress:()=>state.ro
   getSummary:cloudSummary,
   onLogin:info=>{if(info.voll)state.name=info.voll;if(info.klasse)state.klasse=info.klasse;persistLocal();showCloudUi();updateHeader();setTimeout(()=>Cloud.changed(),0);}});
 showCloudUi();
+
+window.KX_READY=()=>{if(PAGE==='pT'&&state.cur){const a=document.activeElement,k=a&&a.dataset?a.dataset.i:null;renderRound();if(k!=null){const x=document.querySelector('.task input[data-i="'+k+'"]');if(x)x.focus();}}};
+if(window.katex)window.KX_READY();
 </script>
 <script>
 /* ================= 🇬🇧 DFU-Hilfe (Sprachhilfe) =================

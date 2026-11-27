@@ -123,6 +123,7 @@ body.dfu-off .dfu{text-decoration:none;cursor:inherit}
 .kpad.np{gap:8px}.kpad.np button{min-width:74px;font-size:28px;padding:10px 0}.kpad.np button.go{background:var(--ok);min-width:110px}
 .nvb{white-space:nowrap;font-size:15px;padding:7px 10px}
 .acard .ai{font-weight:700}
+.task .mu{font-size:19px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -1386,6 +1387,125 @@ function symFormIssue(ast,form){
   if(form==='coefpow'){if(powOk(ast))return '';if(ast.t==='prod'&&ast.f.length===2&&ast.f.every(f=>f.op!=='/')&&((ast.f[0].node.t==='num'&&powOk(ast.f[1].node))||(ast.f[1].node.t==='num'&&powOk(ast.f[0].node))))return '';return 'Fasse zusammen zu <b>Zahl · Potenz</b>, z. B. 2 · 3<sup>n</sup>.';}
   return '';
 }
+/* =====================================================================
+   Größen umrechnen: Längen, Massen, Zeit, Flächen, Volumen (nur metrisch)
+   dim 1 = ohne Komma, dim 2 = mit Komma
+   ===================================================================== */
+/* Zahl mit Komma und Leerzeichen als Tausender-Trennung (ab 10 000) */
+function mFmt(q){let s=qDec(q);if(s===null)return qHtml(q);const neg=s.startsWith('−');if(neg)s=s.slice(1);
+  let [ip,fp]=s.split(',');if(ip.length>4)ip=ip.replace(/\B(?=(\d{3})+(?!\d))/g,'\u202f');return (neg?'−':'')+ip+(fp!==undefined?','+fp:'');}
+const mPlain=q=>(qDec(q)||'').replace('−','-');
+const LAD={
+  L:{u:['mm','cm','dm','m','km'],f:[1,10,100,1000,1e6]},
+  M:{u:['mg','g','kg','t'],f:[1,1e3,1e6,1e9]},
+  F:{u:['mm²','cm²','dm²','m²','a','ha','km²'],f:[1,1e2,1e4,1e6,1e8,1e10,1e12]},
+  V:{u:['mm³','cm³','dm³','m³'],f:[1,1e3,1e6,1e9]},
+  V2:{u:['ml','cm³','l','dm³','hl','m³'],f:[1,1,1e3,1e3,1e5,1e6]},
+  Z:{u:['s','min','h','d'],f:[1,60,3600,86400]}};
+const MPAIRS={
+  L:[null,[[0,1],[1,2],[2,3],[3,4]],[[0,2],[0,3],[1,3],[1,4],[0,2]]],
+  M:[null,[[0,1],[1,2],[2,3]],[[0,2],[1,3]]],
+  F:[null,[[0,1],[1,2],[2,3]],[[0,2],[1,3],[0,3]],[[3,4],[4,5],[5,6],[3,5],[4,6],[2,4]]],
+  V:[null,[[0,1],[1,2],[2,3]],[[0,2],[1,3]]],
+  V2:[null,null,null,[[0,2],[2,4],[2,3],[0,1],[1,2],[2,5],[4,5],[3,0]]]};
+const decPl=q=>{let d=q.d,k=0;while(d%10===0){d/=10;k++;}while(d%2===0||d%5===0){d=d%2===0?d/2:d/5;k++;}return k;};
+function convHint(kind,F,big,small){
+  const f=F>=1?F:1/F,dir=F>=1?`Von der <b>großen</b> zur <b>kleinen</b> Einheit: <b>mal ${mFmt(qi(f))}</b>.`:`Von der <b>kleinen</b> zur <b>großen</b> Einheit: <b>geteilt durch ${mFmt(qi(f))}</b>.`;
+  const step=kind==='F'?'Bei Flächen ist die Umrechnungszahl von einer Einheit zur nächsten <b>100</b> (nicht 10!).':kind==='V'||kind==='V2'?'Bei Volumen ist die Umrechnungszahl von einer Einheit zur nächsten <b>1000</b> (nicht 10!). 1 l = 1 dm³, 1 ml = 1 cm³.':kind==='M'?'Bei Massen ist die Umrechnungszahl immer <b>1000</b>.':kind==='L'?'Längen: 1 cm = 10 mm, 1 dm = 10 cm, 1 m = 10 dm, 1 km = 1000 m.':'';
+  const komma=Number.isInteger(Math.log10(f))?` Das Komma rückt um <b>${Math.round(Math.log10(f))} ${Math.round(Math.log10(f))===1?'Stelle':'Stellen'}</b> nach ${F>=1?'rechts':'links'}.`:'';
+  return `1 ${big} = ${mFmt(qi(f))} ${small}. ${dir}${komma} ${step}`;
+}
+/* eine Umrechnung zwischen zwei Einheiten einer Leiter */
+function convTask(kind,i,j,comma){
+  const L=LAD[kind],F=new Q(L.f[i],L.f[j]),fv=F.val();
+  let a;
+  for(let t=0;t<200;t++){
+    if(!comma){
+      if(fv>=1){a=qi(fv>=1e5?ri(2,20):pick([ri(2,9),ri(10,99),ri(2,9)*10,ri(100,999)]));}
+      else{const G=Math.round(1/fv);a=qi(G*(G>=1e5?ri(2,20):pick([ri(2,9),ri(10,99),ri(2,9)*10])));}
+    }else{
+      if(fv>=1){const k=ri(1,2);let n=ri(1,k===1?99:999);if(n%10===0)n++;a=new Q(n,Math.pow(10,k));}
+      else{const G=Math.round(1/fv);let n=pick([ri(1,9),ri(11,99),ri(101,999),ri(1001,9999)]);if(n%G===0)n++;a=qi(n);if(G===1){a=new Q(ri(11,999),pick([10,100]));}}
+    }
+    const r=a.mul(F);
+    if(comma&&a.isInt()&&r.isInt()&&fv!==1)continue;
+    if(decPl(r)>4||decPl(a)>3||r.val()>5e7)continue;
+    const big=fv>=1?L.u[i]:L.u[j],small=fv>=1?L.u[j]:L.u[i];
+    const kindH=kind;
+    return {html:`${mFmt(a)} ${L.u[i]} = <span class="gap">?</span>`,unit:L.u[j],kind:'num',a:r,want:'dec',sol:`${mFmt(a)} ${L.u[i]} = ${mFmt(r)} ${L.u[j]}`,ans:mPlain(r),
+      tip:v=>{const ratio=v/r.val();
+        if((kindH==='F'||kindH==='V'||kindH==='V2')&&isFinite(ratio)&&ratio>0){const st=kindH==='F'?2:3,d=Math.round(Math.abs(Math.log10(fv)));const used=Math.abs(Math.log10(ratio));
+          if(d&&Math.abs(used-(d-d/st))<1e-6)return '<b>Achtung:</b> Du hast wie bei Längen mit 10 gerechnet. '+convHint(kindH,fv,big,small);}
+        const dt=digitsTip(v,r.val());return [/mal zu|Vorzeichen/.test(dt)?dt:'',convHint(kindH,fv,big,small)].filter(Boolean).join(' ');}};
+  }
+  return convTask(kind,i,j,false);
+}
+/* zusammengesetzte Größen: 3 m 25 cm */
+const MIXP={L:[['m','cm',100],['km','m',1000],['m','mm',1000],['cm','mm',10]],M:[['kg','g',1000],['t','kg',1000],['g','mg',1000]],
+  Z:[['h','min',60],['min','s',60],['d','h',24]]};
+function mixTask(kind,comma){
+  const [B,S,G]=pick(MIXP[kind]);
+  const b=ri(1,kind==='Z'?9:20);let s=ri(1,G-1);
+  if(kind==='Z'&&comma)s=pick(G===24?[6,12,18]:[15,30,45,6,12,24,36,48,54].filter(x=>x<G));
+  const tot=qi(b*G+s),mixH=`${b} ${B} ${s} ${S}`;
+  const tipT=kind==='Z'?`1 ${B} = ${G} ${S} (nicht 100!).`:`1 ${B} = ${G} ${S}.`;
+  const k=ri(0,1);
+  if(!comma){
+    if(k===0)return {html:`${mixH} = <span class="gap">?</span>`,unit:S,kind:'num',a:tot,want:'int',sol:`${mixH} = ${mFmt(tot)} ${S}`,ans:String(tot.n),
+      tip:v=>(v===b*100+s&&G!==100?`<b>Achtung:</b> ${tipT} `:'')+`Rechne erst ${b} ${B} in ${S} um (${b} · ${G}), dann addiere ${s} ${S}. ${tipT}`};
+    return {html:`${mFmt(tot)} ${S} = <span class="gap">?</span> ${B} <span class="gap">?</span> ${S}`,kind:'mix',a:[b,s],units:[B,S],ph:`z. B. 2 ${B} 15 ${S}`,sol:`${mFmt(tot)} ${S} = ${mixH}`,ans:`${b} ${B} ${s} ${S}`,
+      tip:()=>`Wie oft passt ${G} in ${tot.n}? Das sind die ${B}. Der <b>Rest</b> sind die ${S}. ${tipT}`};
+  }
+  const dec=new Q(b*G+s,G);
+  if(kind==='Z'||k===0){
+    return {html:`${mixH} = <span class="gap">?</span>`,unit:B,kind:'num',a:dec,want:'dec',sol:`${mixH} = ${mFmt(dec)} ${B}`,ans:mPlain(dec),
+      tip:v=>{const naive=b+s/Math.pow(10,String(s).length);
+        if(kind==='Z'&&Math.abs(v-naive)<1e-9)return `<b>Achtung:</b> ${s} ${S} sind nicht 0,${s} ${B}! ${s} ${S} = ${s}/${G} ${B} = ${mFmt(new Q(s,G))} ${B}. ${tipT}`;
+        if(kind!=='Z'&&Math.abs(v-naive)<1e-9&&String(G).length-1>String(s).length)return `<b>Achtung:</b> ${s} ${S} = ${mFmt(new Q(s,G))} ${B} – denk an die <b>Null</b> nach dem Komma!`;
+        return `${s} ${S} = ${s}/${G} ${B}. Schreibe es als Dezimalzahl und addiere ${b}. ${tipT}`;}};
+  }
+  return {html:`${mFmt(dec)} ${B} = <span class="gap">?</span> ${B} <span class="gap">?</span> ${S}`,kind:'mix',a:[b,s],units:[B,S],ph:`z. B. 3 ${B} 25 ${S}`,sol:`${mFmt(dec)} ${B} = ${mixH}`,ans:`${b} ${B} ${s} ${S}`,
+    tip:()=>`Vor dem Komma stehen die ganzen ${B}. Rechne den Teil nach dem Komma in ${S} um. ${tipT}`};
+}
+/* Zeit (Umrechnungszahlen 60 und 24) */
+function zeitTask(lvl,comma){
+  if(lvl===3)return mixTask('Z',comma);
+  const P=lvl===1?[[2,1],[1,2],[1,0],[0,1]]:[[3,2],[2,3],[2,0],[0,2],[3,1]];
+  const [i,j]=pick(P),L=LAD.Z,F=new Q(L.f[i],L.f[j]),fv=F.val();let a;
+  if(!comma){if(fv>=1)a=qi(fv>=1440?ri(1,5):ri(2,12));else{const G=Math.round(1/fv);a=qi(G*(G>=1440?ri(1,4):ri(2,10)));}}
+  else{const hm=(i===2&&j===1)||(i===1&&j===2)||(i===1&&j===0)||(i===0&&j===1);const fr_=hm?pick([0.5,0.25,0.75,0.1,0.2,1.5,2.5,1.25,3.5,2.75]):pick([0.5,0.25,0.75])+ri(0,3);
+    if(fv>=1)a=new Q(Math.round(fr_*100),100);else{const G=Math.round(1/fv);a=new Q(Math.round(fr_*100)*G,100);}}
+  const r=a.mul(F);if(!r.isInt()&&decPl(r)>2)return zeitTask(lvl,comma);
+  const big=fv>=1?L.u[i]:L.u[j],small=fv>=1?L.u[j]:L.u[i],f=Math.round(fv>=1?fv:1/fv);
+  return {html:`${mFmt(a)} ${L.u[i]} = <span class="gap">?</span>`,unit:L.u[j],kind:'num',a:r,want:'dec',sol:`${mFmt(a)} ${L.u[i]} = ${mFmt(r)} ${L.u[j]}`,ans:mPlain(r),
+    tip:v=>{const w=a.val()*(fv>=1?100:0.01);
+      if(Math.abs(v-w)<1e-9||Math.abs(v*f-a.val()*100)<1e-9)return `<b>Achtung:</b> Bei der Zeit ist die Umrechnungszahl <b>nicht 100</b>! 1 ${big} = ${f} ${small}.`;
+      return `1 ${big} = ${f} ${small}. ${fv>=1?'Große → kleine Einheit: <b>mal '+f+'</b>.':'Kleine → große Einheit: <b>geteilt durch '+f+'</b>.'}${comma?' Tipp: 0,5 = die Hälfte, 0,25 = ein Viertel, 0,1 = ein Zehntel.':''}`;}};
+}
+function genMeas(kind){
+  return (lvl,op,dim)=>{const comma=dim===2;
+    if(kind==='Z')return zeitTask(lvl,comma);
+    if(lvl===3&&(kind==='L'||kind==='M'))return mixTask(kind,comma);
+    const K=kind==='V'&&lvl===3?'V2':kind;
+    let [i,j]=pick(MPAIRS[K][lvl]);if(RND()<0.5)[i,j]=[j,i];
+    return convTask(K,i,j,comma);};
+}
+/* Antwort „2 h 15 min“ oder „2 15“ → [2, 15] */
+function parseMix(raw,units){
+  const s=normIn(raw).replace(/,/g,'.');const re=/(\d+(?:\.\d+)?)\s*([a-zA-Z²³]*)/g;let m;const out=[];
+  while((m=re.exec(s)))out.push([+m[1],m[2]]);
+  if(out.length!==2)return null;
+  if(out.some((x,k)=>x[1]&&x[1]!==units[k]))return 'unit';
+  return out.map(x=>x[0]);
+}
+AREAS.push(
+  {id:'ML',grp:'groessen',ic:'📏',name:'Längen',kl:'Kl. 5',ops:false,lv:['benachbarte Einheiten (mm, cm, dm, m, km)','über mehrere Einheiten','zusammengesetzt (3 m 25 cm)'],dim:{name:'Zahlen',lv:['ohne Komma','mit Komma']},est:(l,d)=>[0,8,12,20][l]+(d===2?6:0),g:genMeas('L')},
+  {id:'MM',grp:'groessen',ic:'⚖️',name:'Massen (Gewichte)',kl:'Kl. 5–6',ops:false,lv:['benachbarte Einheiten (mg, g, kg, t)','über mehrere Einheiten','zusammengesetzt (2 kg 350 g)'],dim:{name:'Zahlen',lv:['ohne Komma','mit Komma']},est:(l,d)=>[0,8,12,20][l]+(d===2?6:0),g:genMeas('M')},
+  {id:'MZ',grp:'groessen',ic:'⏰',name:'Zeit',kl:'Kl. 5–6',ops:false,lv:['h ↔ min, min ↔ s','Tage, Stunden, Sekunden','zusammengesetzt (2 h 15 min)'],dim:{name:'Zahlen',lv:['ohne Komma','mit Komma (1,5 h)']},est:(l,d)=>[0,10,15,20][l]+(d===2?8:0),g:genMeas('Z')},
+  {id:'MF',grp:'groessen',ic:'🟩',name:'Flächen',kl:'Kl. 6–7',ops:false,lv:['benachbarte Einheiten (mm² … m²)','über mehrere Einheiten','a, ha, km²'],dim:{name:'Zahlen',lv:['ohne Komma','mit Komma']},est:(l,d)=>[0,12,18,18][l]+(d===2?8:0),g:genMeas('F')},
+  {id:'MV',grp:'groessen',ic:'🧊',name:'Volumen',kl:'Kl. 6–7',ops:false,lv:['benachbarte Einheiten (mm³ … m³)','über mehrere Einheiten','Liter und Milliliter'],dim:{name:'Zahlen',lv:['ohne Komma','mit Komma']},est:(l,d)=>[0,12,18,15][l]+(d===2?8:0),g:genMeas('V')}
+);
+GROUPS.splice(1,0,['groessen','Größen umrechnen (Einheiten)']);
 
 
 /* ---------- Kamera / Dateiauswahl: zählt NICHT als „Seite verlassen“ ----------
@@ -1513,6 +1633,7 @@ function renderTrain(){
     :ar.id==='PF'?'Schreibe die Primfaktoren mit · dazwischen: 2^3 · 3 · 5 oder 2 · 2 · 2 · 3 · 5.'
     :ar.id==='AK'?'Ausklammern: Schreibe Faktor(Klammer), z. B. 4a^3(1 + 2a^2). Ausmultiplizieren: ohne Klammern.'
     :ar.id==='PO'?'Potenzen mit ^, Exponent mit mehreren Zeichen in Klammern: 2^(n+1). Kann man nichts zusammenfassen? Tippe auf <b>✋ geht nicht</b>.'
+    :ar.grp==='groessen'?'Gib nur die <b>Zahl</b> ein (die Einheit steht schon da). Dezimalzahlen mit Komma: 3,25. Zwei Einheiten: z. B. <b>2 h 15 min</b>.'
     :ar.id==='QW'?'Brüche mit Schrägstrich (3/4), Dezimalzahlen mit Komma (1,2).':ar.id==='GK'?'Gib nur die Zahl ein.':'';
   c3.appendChild(el('div','note',`⏱ <b>Zielzeit: ${mmss(tg)} min</b> für ${S.n} Aufgaben${bk?` · 🏆 Dein Rekord auf diesem Niveau: ${bk.s}/${bk.n} in ${mmss(bk.t)}`:''}${how?'<br>✍️ '+how:''}`));
   const st=el('div','row');st.style.justifyContent='center';st.style.marginTop='14px';
@@ -1540,6 +1661,14 @@ function check(tk,raw){
   if(!raw)return {ok:false,why:'Keine Antwort.'};
   if(raw===NV){if(tk.form==='nv')return {ok:true};return {ok:false,why:'Hier <b>kann</b> man vereinfachen! '+tk.tip()};}
   if(tk.form==='nv')return {ok:false,why:'Diese Aufgabe lässt sich <b>nicht</b> vereinfachen – tippe auf <b>✋ geht nicht</b>. '+tk.tip()};
+  if(tk.kind==='mix'){
+    const m=parseMix(raw,tk.units);
+    if(m==='unit')return {ok:false,why:`Achte auf die Einheiten: zuerst ${tk.units[0]}, dann ${tk.units[1]}.`};
+    if(!m)return {ok:false,why:`Schreibe zwei Zahlen, z. B. ${tk.ph.replace('z. B. ','')}. `+tk.tip()};
+    if(m[0]===tk.a[0]&&m[1]===tk.a[1])return {ok:true};
+    return {ok:false,why:tk.tip()};
+  }
+  if(tk.unit){raw=raw.replace(/[\s\u202f]+/g,'');const u=tk.unit.replace(/[²³]/g,'');raw=raw.replace(new RegExp('('+u+'[²³23]?)$','i'),'');if(!raw)return {ok:false,why:'Keine Zahl.'};}
   if(tk.kind==='pf'){
     const fs=parseFactors(raw);if(!fs)return {ok:false,why:'Schreibe die Faktoren mit · dazwischen, z. B. 2^3 · 3 · 5. '+tk.tip()};
     const prod=fs.reduce((a,[b,e])=>a*Math.pow(b,e),1),np=[...new Set(fs.filter(([b])=>!isPrime(b)).map(([b])=>b))];
@@ -1595,7 +1724,7 @@ function check(tk,raw){
   return {ok:true};
 }
 const AREA_OF=tk=>state.cur?state.cur.area:'';
-function shownAnswer(raw,tk){if(!String(raw||'').trim())return '<i>(leer)</i>';if(raw===NV)return NV;return tk.kind==='num'||tk.kind==='pf'?esc(raw):prettyIn(raw);}
+function shownAnswer(raw,tk){if(!String(raw||'').trim())return '<i>(leer)</i>';if(raw===NV)return NV;return tk.kind==='num'||tk.kind==='pf'||tk.kind==='mix'?esc(raw)+(tk.unit&&!/[a-z²³]\s*$/i.test(raw)?' '+tk.unit:''):prettyIn(raw);}
 
 let focusIdx=-1,focusT0=0;
 function focusStop(){if(focusIdx>=0&&focusT0&&state.cur&&state.cur.phase==='run'){state.cur.t[focusIdx]+=(Date.now()-focusT0)/1000;}focusIdx=-1;focusT0=0;}
@@ -1630,18 +1759,18 @@ function taskCard(tk,i){
   const st=run?'':okArr[i]?'ok':co.ok?'fixed':co.shown?'shown':'bad';
   const lead=tk.lead||(tk.kind==='term'?'Vereinfache:':tk.kind==='qe'?'Scheitelpunktform von':c.area==='E'?'Löse die Gleichung:':'');
   const card=el('div','task '+st);
-  card.innerHTML=`<span class="tn">${i+1}</span>${lead?`<div class="tl">${lead}</div>`:''}<div class="tq">${tk.html}${tk.kind==='num'&&c.area!=='P'&&c.area!=='E'&&!/=\s*$/.test(tk.html)&&!tk.pad?' =':''}</div>`;
+  card.innerHTML=`<span class="tn">${i+1}</span>${lead?`<div class="tl">${lead}</div>`:''}<div class="tq">${tk.html}${tk.kind==='num'&&c.area!=='P'&&c.area!=='E'&&!/=\s*$/.test(tk.html)&&!tk.pad&&!tk.unit&&tk.kind!=='mix'?' =':''}</div>`;
   const unit=c.area==='E'?'x =':'';
   const mkInput=(val,onIn)=>{const w=el('div','row');w.style.flexWrap='nowrap';if(unit)w.appendChild(el('b','',unit));
     const inp=el('input');inp.type='text';inp.autocomplete='off';inp.setAttribute('autocapitalize','off');inp.setAttribute('autocorrect','off');inp.spellcheck=false;
-    inp.inputMode=tk.pad?'none':(c.area==='N'||c.area==='V'||c.area==='D'||c.area==='GK')?'decimal':'text';inp.value=val||'';inp.dataset.i=i;
+    inp.inputMode=tk.pad?'none':(c.area==='N'||c.area==='V'||c.area==='D'||c.area==='GK'||tk.unit)?'decimal':'text';if(tk.ph)inp.placeholder=tk.ph;inp.value=val||'';inp.dataset.i=i;
     inp.oninput=()=>{onIn(inp.value);if(prev)prev.innerHTML=inp.value.trim()&&inp.value!==NV?'Vorschau: '+prettyIn(inp.value):'';};
     inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();const all=[...document.querySelectorAll('.task input:not([disabled])')];const k=all.indexOf(inp);if(all[k+1])all[k+1].focus();else inp.blur();}});
-    inp.addEventListener('focus',()=>{focusStop();focusIdx=i;focusT0=Date.now();if(tk.pad)showNpad(inp);else if(tk.kind!=='num')showKpad(inp,tk);else hideKpad();});
+    inp.addEventListener('focus',()=>{focusStop();focusIdx=i;focusT0=Date.now();if(tk.pad)showNpad(inp);else if(tk.kind!=='num'&&tk.kind!=='mix')showKpad(inp,tk);else hideKpad();});
     inp.addEventListener('blur',()=>{focusStop();setTimeout(()=>{if(!document.activeElement||!document.activeElement.closest||!document.activeElement.closest('.task'))hideKpad();},150);});
-    w.appendChild(inp);let prev=null;
+    w.appendChild(inp);if(tk.unit)w.appendChild(el('b','mu',tk.unit));let prev=null;
     if(c.area==='PO'&&c.lvl>=2){const nb=el('button','btn sec nvb',NV);nb.type='button';nb.onclick=()=>{inp.value=NV;inp.dispatchEvent(new Event('input'));};w.appendChild(nb);}
-    if(tk.kind!=='num'&&tk.kind!=='pf'){prev=el('div','prev');prev.innerHTML=inp.value.trim()?'Vorschau: '+prettyIn(inp.value):'';}
+    if(tk.kind!=='num'&&tk.kind!=='pf'&&tk.kind!=='mix'){prev=el('div','prev');prev.innerHTML=inp.value.trim()?'Vorschau: '+prettyIn(inp.value):'';}
     return {w,inp,prev};};
   if(run){
     const m=mkInput(c.ans[i],v=>{c.ans[i]=v;saveSoon();fillInfo();});card.appendChild(m.w);if(m.prev)card.appendChild(m.prev);
@@ -1922,6 +2051,19 @@ window.DFU=(function(){
     ['vielfaches','Vielfache','das','die Vielfachen','multiple','w','Vielfache|Vielfaches|kgV'],
     ['ausklammern','ausklammern','','','to factor out','w','ausklammern|Klammere|ausgeklammert|Ausklammern'],
     ['ergaenzen','ergänzen','','','to complete (to 10, 100 …)','w','ergänzen|Ergänze|Ergänzen'],
+    ['einheit','Einheit','die','die Einheiten','unit','g','Einheit|Einheiten'],
+    ['groesse','Größe','die','die Größen','quantity (number + unit)','g','Größe|Größen'],
+    ['umrechnen','umrechnen','','','to convert','g','umrechnen|Rechne|umgerechnet|Umrechnung'],
+    ['umrechnungszahl','Umrechnungszahl','die','die Umrechnungszahlen','conversion factor','g','Umrechnungszahl'],
+    ['laenge','Länge','die','die Längen','length','g','Länge|Längen'],
+    ['masse','Masse','die','die Massen','mass (weight)','g','Masse|Massen|Gewicht|Gewichte'],
+    ['flaeche','Fläche','die','die Flächen','area','g','Fläche|Flächen|Flächeninhalt'],
+    ['volumen','Volumen','das','die Volumen','volume','g','Volumen'],
+    ['zeit','Zeit','die','die Zeiten','time','g','Zeit'],
+    ['stunde','Stunde','die','die Stunden','hour (h)','g','Stunde|Stunden'],
+    ['minute','Minute','die','die Minuten','minute (min)','g','Minute|Minuten'],
+    ['sekunde','Sekunde','die','die Sekunden','second (s)','g','Sekunde|Sekunden'],
+    ['liter','Liter','der','die Liter','litre (l)','g','Liter|Milliliter'],
     ['berechnen','berechnen','','','calculate','o','berechnen|berechne|rechnen|rechne|Rechne','Mit Zahlen ein Ergebnis ausrechnen.'],
     ['vereinfachen','vereinfachen','','','simplify','o','vereinfachen|Vereinfache|vereinfacht','Einen Term so kurz wie möglich schreiben.'],
     ['loesen','lösen','','','solve','o','lösen|Löse','Die Zahl für x finden, die die Gleichung wahr macht.'],
@@ -1929,7 +2071,7 @@ window.DFU=(function(){
     ['verbessern','verbessern','','','correct (your mistakes)','o','verbessern|Verbessere|Verbesserung|verbessert','Fehler finden und richtig machen.'],
     ['auswerten','auswerten','','','evaluate, mark','o','auswerten|Auswerten','Nachsehen, was richtig und was falsch ist.']
   ];
-  const KAT={z:'Zahlen und Rechenarten',p:'Prozentrechnung',b:'Brüche und Dezimalzahlen',t:'Terme und Gleichungen',w:'Potenzen, Wurzeln, Teilbarkeit',o:'Arbeitsaufträge (Operatoren)'};
+  const KAT={z:'Zahlen und Rechenarten',p:'Prozentrechnung',b:'Brüche und Dezimalzahlen',t:'Terme und Gleichungen',w:'Potenzen, Wurzeln, Teilbarkeit',g:'Größen und Einheiten',o:'Arbeitsaufträge (Operatoren)'};
   const BY={};W.forEach(w=>BY[w[0]]=w);
   const FORM={};W.forEach(w=>w[6].split('|').forEach(f=>FORM[f.toLowerCase()]=w[0]));
   const L='A-Za-zÄÖÜäöüß';

@@ -1476,7 +1476,7 @@ function renderTrain(){
   const ar=AREA(S.area);if(S.lvl>ar.lv.length)S.lvl=1;S.dim=S.dim||1;
   const c1=el('div','card');
   c1.innerHTML=`<h2 style="margin-top:0">Schnell und richtig rechnen ⚡</h2>
-    <ol class="steps"><li><b>Wähle</b> unten die Aufgaben aus.</li><li><b>Mach dich bereit:</b> Papier und Stift auf den Tisch, Taschenrechner weg.</li><li>Klick auf <b>▶ Start</b>. Die <b>Zeit läuft</b>. Du siehst alle Aufgaben auf einmal.</li><li>Wenn du fertig bist: <b>✅ Auswerten</b>. Erst dann siehst du, was richtig ist.</li><li><b>Verbessere</b> deine Fehler. Erst danach kannst du eine neue Runde starten.</li></ol>
+    <ol class="steps"><li><b>Wähle</b> unten die Aufgaben aus.</li><li><b>Mach dich bereit:</b> Papier und Stift auf den Tisch, Taschenrechner weg.</li><li>Klick auf <b>▶ Start</b>. Die <b>Zeit läuft</b>. Du siehst alle Aufgaben auf einmal.</li><li>Wenn du fertig bist: <b>✅ Auswerten</b>. Erst dann siehst du, was richtig ist.</li><li><b>Verbessere</b> deine Fehler. Erst danach kannst du eine neue Runde starten.</li><li>Zu schwer? Mit <b>✖ Abbrechen</b> (beim Rechnen) oder <b>🏳️ Aufhören</b> (beim Verbessern) kommst du zurück zur Auswahl.</li></ol>
     <div class="warn">👀 <b>Bleib während einer Runde auf dieser Seite!</b> Wenn du beim Rechnen oder Verbessern in eine andere App oder einen anderen Tab wechselst, wird das gespeichert und deiner Lehrkraft gemeldet. <span class="en">(stay on this page)</span></div>`;
   box.appendChild(c1);
   if(!Cloud.active()){
@@ -1614,10 +1614,13 @@ function renderRound(){
   // Buttons
   const btns=el('div','row');btns.style.justifyContent='center';btns.style.margin='18px 0 90px';
   if(run){const b=el('button','btn green big','✅ Fertig – auswerten');b.onclick=()=>finishRound(b);bar.appendChild(b.cloneNode(true));bar.lastChild.onclick=()=>finishRound(bar.lastChild);btns.appendChild(b);
+    const xa=el('button','btn sec','✖ Abbrechen');xa.onclick=()=>abortRound(xa);bar.appendChild(xa);
     const x=el('button','btn sec','✖ Runde abbrechen');x.onclick=()=>abortRound(x);btns.appendChild(x);}
-  else if(c.phase==='corr'){const b=el('button','btn yellow big','🔁 Verbesserung prüfen');b.onclick=checkCorr;btns.appendChild(b);bar.appendChild(Object.assign(b.cloneNode(true),{onclick:checkCorr}));}
+  else if(c.phase==='corr'){const b=el('button','btn yellow big','🔁 Verbesserung prüfen');b.onclick=checkCorr;btns.appendChild(b);bar.appendChild(Object.assign(b.cloneNode(true),{onclick:checkCorr}));
+    const g=el('button','btn sec','🏳️ Zu schwer – aufhören');g.onclick=()=>giveUp(g);btns.appendChild(g);const g2=el('button','btn sec','🏳️ Aufhören');g2.onclick=()=>giveUp(g2);bar.appendChild(g2);}
   else{const b=el('button','btn green big','🔁 Neue Runde (gleiche Einstellungen)');b.onclick=()=>{endRound();startRoundSame();};btns.appendChild(b);
-    const b2=el('button','btn sec big','⚙️ Andere Aufgaben');b2.onclick=()=>{endRound();renderTrain();};btns.appendChild(b2);}
+    const b2=el('button','btn sec big','⚙️ Andere Aufgaben');b2.onclick=()=>{endRound();renderTrain();};btns.appendChild(b2);
+    const b3=el('button','btn sec','⚙️ Andere Aufgaben');b3.onclick=()=>{endRound();renderTrain();};bar.appendChild(b3);}
   box.appendChild(btns);
   tickRound();clearInterval(TICK);if(run)TICK=setInterval(tickRound,500);
   if(!run)hideKpad();
@@ -1682,7 +1685,7 @@ function scoreCard(){
     <span>⏱ <b>${mmss(s)}</b> (Ziel ${mmss(c.target)}) ${s<=c.target?'✅':s<=1.2*c.target?'🙂':'⏰'}</span>${c.away?`<span>👀 Seite verlassen: <b>${c.away}-mal</b></span>`:''}</div>
     ${rec}${bk&&!c.record?`<p class="w-note">🏆 Dein Rekord: ${bk.s}/${bk.n} in ${mmss(bk.t)}</p>`:''}
     ${slow?`<p class="w-note">Am längsten gebraucht: ${slow}</p>`:''}
-    ${c.phase==='corr'?`<div class="warn">🔧 <b>Verbessere jetzt deine Fehler.</b> Lies den Tipp 💡, schreibe die richtige Lösung in das Feld und klicke auf <b>🔁 Verbesserung prüfen</b>. Erst danach kannst du eine neue Runde starten.</div>`:'<div class="note">🎉 Alles verbessert! Du kannst eine neue Runde starten.</div>'}`;
+    ${c.phase==='corr'?`<div class="warn">🔧 <b>Verbessere jetzt deine Fehler.</b> Lies den Tipp 💡, schreibe die richtige Lösung in das Feld und klicke auf <b>🔁 Verbesserung prüfen</b>. Erst danach kannst du eine neue Runde starten.<br>Die Aufgaben sind <b>zu schwer</b>? Dann klicke auf <b>🏳️ Aufhören</b>: Du siehst die Lösungen und kannst ein leichteres Niveau wählen.</div>`:c.gaveUp?'<div class="note">🏳️ Du hast aufgehört. Lies die <b>Lösungen 👀</b> in Ruhe durch. Wähle dann unter <b>⚙️ Andere Aufgaben</b> ein <b>leichteres Niveau</b>.</div>':'<div class="note">🎉 Alles verbessert! Du kannst eine neue Runde starten.</div>'}`;
   return box;
 }
 let armFinish=false,armAbort=false;
@@ -1703,6 +1706,13 @@ function abortRound(btn){
   armAbort=false;focusStop();clearInterval(TICK);const c=state.cur;c.end=new Date().toISOString();c.sec=Math.round(elapsed(c));c.aborted=true;
   recordRound();state.cur=null;save();renderTrain();
 }
+let armGive=false;
+function giveUp(btn){
+  if(!armGive){armGive=true;const t=btn.textContent;btn.textContent='⚠️ Wirklich aufhören? Nochmal klicken';setTimeout(()=>{armGive=false;if(document.body.contains(btn))btn.textContent=t;},4000);return;}
+  armGive=false;const c=state.cur;c.gaveUp=true;
+  c.corr.forEach((co,i)=>{if(!c.ok[i]&&!co.ok)co.shown=true;});
+  save();afterCorr();window.scrollTo(0,0);
+}
 function checkCorr(){
   const c=state.cur,T=tasks();let fixed=0,still=0;
   T.forEach((tk,i)=>{if(c.ok[i])return;const co=c.corr[i];if(co.ok||co.shown)return;
@@ -1721,7 +1731,7 @@ function endRound(){state.cur=null;TASKS=null;save();}
 /* Runde in die Liste schreiben (wird bei Verbesserungen aktualisiert) */
 function recordRound(){
   const c=state.cur,T=tasks();
-  const rec={id:c.id,area:c.area,lvl:c.lvl,dim:c.dim||0,ops:c.ops,n:c.n,date:c.start,sec:c.sec,target:c.target,score:c.score||0,slow:c.slow||0,away:c.away,awaySec:c.awaySec,aborted:!!c.aborted,
+  const rec={id:c.id,area:c.area,lvl:c.lvl,dim:c.dim||0,ops:c.ops,n:c.n,date:c.start,sec:c.sec,target:c.target,score:c.score||0,slow:c.slow||0,away:c.away,awaySec:c.awaySec,aborted:!!c.aborted,gaveUp:!!c.gaveUp,
     fixed:c.ok?c.corr.filter((x,i)=>!c.ok[i]&&x.ok).length:0,shown:c.ok?c.corr.filter((x,i)=>!c.ok[i]&&x.shown).length:0,done:c.phase==='done',
     wrong:c.ok?T.map((tk,i)=>c.ok[i]?null:[plainT(tk.html),String(c.ans[i]||'').slice(0,40)]).filter(Boolean).slice(0,40):[]};
   const k=state.rounds.findIndex(r=>r.id===c.id);if(k>=0)state.rounds[k]=rec;else state.rounds.push(rec);
@@ -1777,7 +1787,7 @@ function renderHist(){
   h+='<div class="card"><h3>🏆 Meine Rekorde</h3><table><tr><th>Bereich</th>'+[1,2,3,4,5,6].map(l=>`<th>Niveau ${l}</th>`).join('')+'</tr>'+
     AREAS.map(a=>`<tr><td style="text-align:left">${a.ic} ${a.name}</td>`+[1,2,3,4,5,6].map(l=>{if(l>a.lv.length)return '<td style="background:#f6f7fa"></td>';const ks=Object.keys(state.best).filter(k=>k===a.id+l||k.startsWith(a.id+l+'-'));return `<td>${ks.length?ks.map(k=>{const b=state.best[k];return `${b.s}/${b.n} <small>${mmss(b.t)}${k.includes('-')?' ('+k.split('-')[1]+')':''}</small>`;}).join('<br>'):'–'}</td>`;}).join('')+'</tr>').join('')+'</table></div>';
   h+='<div class="card"><h3>Alle Runden</h3><table><tr><th>Datum</th><th>Bereich</th><th>Niveau</th><th>Richtig</th><th>Zeit / Ziel</th><th>Verbessert</th><th>👀</th></tr>'+
-    R.slice(0,60).map(r=>{const a=AREA(r.area);return `<tr><td>${new Date(r.date).toLocaleDateString('de-DE')} ${new Date(r.date).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}</td><td style="text-align:left">${a.ic} ${a.name}</td><td>${r.lvl}${r.dim?'·'+r.dim:''}</td><td>${r.aborted?'abgebrochen':`${r.score} / ${r.n}`}</td><td>${mmss(r.sec)} / ${mmss(r.target)}${r.slow===2?' ⏰':''}</td><td>${r.aborted?'–':r.done?(r.fixed+(r.shown?` (+${r.shown} 👀)`:''))+' ✅':'noch nicht'}</td><td>${r.away||''}</td></tr>`;}).join('')+'</table></div>';
+    R.slice(0,60).map(r=>{const a=AREA(r.area);return `<tr><td>${new Date(r.date).toLocaleDateString('de-DE')} ${new Date(r.date).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}</td><td style="text-align:left">${a.ic} ${a.name}</td><td>${r.lvl}${r.dim?'·'+r.dim:''}</td><td>${r.aborted?'abgebrochen':`${r.score} / ${r.n}`}</td><td>${mmss(r.sec)} / ${mmss(r.target)}${r.slow===2?' ⏰':''}</td><td>${r.aborted?'–':r.gaveUp?'🏳️ aufgehört'+(r.fixed?` (${r.fixed} verbessert)`:''):r.done?(r.fixed+(r.shown?` (+${r.shown} 👀)`:''))+' ✅':'noch nicht'}</td><td>${r.away||''}</td></tr>`;}).join('')+'</table></div>';
   box.innerHTML=h;
 }
 
@@ -1824,11 +1834,12 @@ function cloudSummary(){
     T[a.id]=[l.score,l.n,l.n-l.score,l.done?1:0,1,a.ic+' '+a.name.split(' ')[0],`${a.name}: letzte Runde (Niveau ${l.lvl}), richtig beim 1. Versuch`];});
   const last=R[R.length-1];const best=Object.keys(state.best).map(k=>{const b=state.best[k];return `${k} ${b.s}/${b.n} ${mmss(b.t)}`;}).join(' · ');
   const n=R.reduce((a,r)=>a+r.n,0),sc=R.reduce((a,r)=>a+r.score,0),tt=R.reduce((a,r)=>a+(r.sec||0),0);
-  return {stars:sc,max:n,err:n-sc,done:R.filter(r=>r.done).length,n:R.length,tasks:T,
+  return {stars:sc,max:n,err:n-sc,done:R.filter(r=>r.done&&!r.gaveUp).length,n:R.length,tasks:T,
     labels:{sterne:'✅ richtig (1. Versuch)',max:'Aufgaben',fehler:'❌ falsch',erledigt:'Runden verbessert'},
-    extra:{last:['Letzte Runde',last?`${AREA(last.area).name} N${last.lvl}${last.dim?'.'+last.dim:''} · ${last.score}/${last.n} · ⏱${mmss(last.sec)}/${mmss(last.target)}${last.away?' · 👀'+last.away:''}${last.done?' · verbessert':' · Verbesserung offen'}`:'–'],
+    extra:{last:['Letzte Runde',last?`${AREA(last.area).name} N${last.lvl}${last.dim?'.'+last.dim:''} · ${last.score}/${last.n} · ⏱${mmss(last.sec)}/${mmss(last.target)}${last.away?' · 👀'+last.away:''}${last.gaveUp?' · 🏳️ aufgehört':last.done?' · verbessert':' · Verbesserung offen'}`:'–'],
       rounds:['Runden',`${R.length} · Σ ${mmss(tt)} min`],best:['🏆 Rekorde',best],
       away:['🚪 Seite verlassen',state.away.n?state.away.n+'× · '+mmss(state.away.sec):'–'],
+      gaveup:['🏳️ aufgehört',R.filter(r=>r.gaveUp).length+' von '+R.length+' Runden'],
       slow:['⏰ zu langsam',R.length?R.filter(r=>r.slow===2).length+' von '+R.length+' Runden':'–'],
       dfu:['DFU-Wörter',window.DFU?DFU.summary():'']}};
 }
